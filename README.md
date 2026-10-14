@@ -2,6 +2,24 @@
 
 以多渠道行銷為驗證情境的自適應 AI Agent 工作流程原型。
 
+## 專案結構
+
+```text
+Dynamic-Adaptive-AI-Agent-Workflow/
+├── frontend/          # 使用者操作介面（尚未實作）
+├── backend/           # FastAPI 後端
+│   ├── app/           # API、資料庫連線與資料模型
+│   ├── requirements.txt
+│   ├── .env.example   # 後端環境設定範本
+│   └── .env           # 本機後端設定，不納入 Git
+├── docs/
+│   └── plans/         # 計畫書 PDF 與 Word 文件
+└── README.md
+```
+
+前端負責使用者操作，後端負責 API、Agent 工作流程與資料庫存取。
+目前已建立後端骨架，前端尚未實作。Neon 連線資訊放在 `backend/.env`；未來前端需要的環境設定放在 `frontend/.env`，各自管理。
+
 ## 目前基礎架構
 
 - FastAPI：後端 API
@@ -13,7 +31,7 @@
 需要 Python 3.11 以上版本，以及一個 Neon 專案。
 
 1. 在 Neon 建立專案，開啟 **Connect** 視窗並複製 PostgreSQL 連線字串。
-2. 在專案根目錄建立 `.env`（尚未存在時可在 CMD 執行 `if not exist .env copy .env.example .env`），填入：
+2. 在 `backend/.env` 填入連線字串（尚未存在時可從專案根目錄在 CMD 執行 `if not exist backend\.env copy backend\.env.example backend\.env`）：
 
    ```dotenv
    DATABASE_URL=postgresql://USER:PASSWORD@HOST.neon.tech/neondb?sslmode=require
@@ -21,7 +39,7 @@
 
    使用 Neon 提供的完整字串，保留其 SSL 等查詢參數。程式會自動使用 psycopg 驅動程式；`.env` 已排除於 Git 追蹤。
 
-3. 開啟 Windows 命令提示字元（CMD），執行：
+3. 在專案根目錄開啟 Windows 命令提示字元（CMD），執行：
 
    ```bat
    python -m venv .venv
