@@ -8,6 +8,7 @@
 frontend/                      使用者介面，目前只有說明
 backend/
   app/                         FastAPI、ORM、連線、基本 API
+  meta_api_test/               Meta OAuth / Instagram API 獨立測試沙盒
   migrations/                  Alembic 版本化 schema
   scripts/manage.py            migration、seed、連線驗證
   tests/                       真實 PostgreSQL 隔離整合測試
@@ -19,6 +20,7 @@ backend/
 ```
 
 資料庫只使用 Neon PostgreSQL。前端設定放 `frontend/`，後端設定放 `backend/`。
+Meta API 沙盒的設定獨立放在 `backend/meta_api_test/.env`，範本為同目錄的 `.env.example`；不要把 Meta 憑證放進一般 `backend/.env`。
 
 ## 本機啟動
 

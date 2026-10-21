@@ -1,6 +1,7 @@
 import os
 import secrets
 import sqlite3
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 import httpx
@@ -10,7 +11,8 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import RedirectResponse
 
 
-load_dotenv()
+PROJECT_DIR = Path(__file__).resolve().parent
+load_dotenv(PROJECT_DIR / ".env")
 
 APP_ID = os.getenv("META_APP_ID")
 APP_SECRET = os.getenv("META_APP_SECRET")
@@ -33,7 +35,7 @@ SCOPES = [
 
 app = FastAPI(title="IG Integration Sandbox")
 STATE_STORE = set()
-DB_PATH = "sandbox.db"
+DB_PATH = str(PROJECT_DIR / "sandbox.db")
 
 
 import json
