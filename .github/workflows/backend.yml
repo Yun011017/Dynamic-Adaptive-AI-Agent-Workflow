@@ -82,6 +82,6 @@ jobs:
       - run: vercel build --prod --token="$VERCEL_TOKEN"
       - name: Deploy development project and verify health
         run: |
-          deployment_url=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")
-          curl --fail --silent --show-error --retry 3 "$deployment_url/health" > /tmp/backend-health.json
+          deployment_url=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" | tail -n 1)
+          curl --fail --location --silent --show-error --retry 3 "$deployment_url/health" > /tmp/backend-health.json
           python -c 'import json; d=json.load(open("/tmp/backend-health.json")); assert d == {"status":"ok", "database":"connected"}; print("Deployment health passed")'
