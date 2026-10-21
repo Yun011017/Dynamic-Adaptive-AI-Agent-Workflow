@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .db import engine, get_db
 from .models import Execution, Goal, Strategy, Workspace
+from .retry import read_with_retry
 from .schemas import ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead
 
 app = FastAPI(title="Dynamic Adaptive AI Agent Workflow", version="0.2.0")
@@ -43,7 +44,10 @@ def workspace(db: DB, credentials: Annotated[HTTPAuthorizationCredentials | None
         raise HTTPException(503, "Development API access is disabled")
     if not credentials or not hmac.compare_digest(credentials.credentials, settings.platform_api_key):
         raise HTTPException(401, "Authentication required", headers={"WWW-Authenticate": "Bearer"})
-    tenant = db.scalar(select(Workspace).where(Workspace.slug == settings.platform_workspace_slug, Workspace.status == "active"))
+    tenant = read_with_retry(
+        lambda: db.scalar(select(Workspace).where(Workspace.slug == settings.platform_workspace_slug, Workspace.status == "active")),
+        reset=db.rollback,
+    )
     if tenant is None:
         raise HTTPException(503, "Configured development workspace is unavailable")
     return tenant.id
@@ -53,7 +57,10 @@ Tenant = Annotated[int, Depends(workspace)]
 
 
 def scoped(db, model, object_id, workspace_id):
-    value = db.scalar(select(model).where(model.id == object_id, model.workspace_id == workspace_id))
+    value = read_with_retry(
+        lambda: db.scalar(select(model).where(model.id == object_id, model.workspace_id == workspace_id)),
+        reset=db.rollback,
+    )
     if value is None:
         raise HTTPException(404, "Resource not found")
     return value
@@ -82,7 +89,10 @@ def create_goal(data: GoalCreate, db: DB, tenant: Tenant):
 def list_goals(db: DB, tenant: Tenant, limit: int = 50, offset: int = 0):
     if not 1 <= limit <= 100 or offset < 0:
         raise HTTPException(422, "Invalid pagination")
-    return db.scalars(select(Goal).where(Goal.workspace_id == tenant).order_by(Goal.id).limit(limit).offset(offset)).all()
+    return read_with_retry(
+        lambda: db.scalars(select(Goal).where(Goal.workspace_id == tenant).order_by(Goal.id).limit(limit).offset(offset)).all(),
+        reset=db.rollback,
+    )
 
 
 @app.get("/goals/{goal_id}", response_model=GoalRead)
