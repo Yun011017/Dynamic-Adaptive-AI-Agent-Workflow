@@ -81,7 +81,12 @@ jobs:
       - run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
       - run: vercel build --prod --token="$VERCEL_TOKEN"
       - name: Deploy development project and verify health
+        env:
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
+          test -n "$VERCEL_AUTOMATION_BYPASS_SECRET" || { echo "Missing VERCEL_AUTOMATION_BYPASS_SECRET"; exit 1; }
           deployment_url=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" | tail -n 1)
-          vercel curl "$deployment_url/health" --token="$VERCEL_TOKEN" --yes --fail --location --silent --show-error --retry 3 > /tmp/backend-health.json
+          curl --fail --silent --show-error --retry 3 --connect-timeout 10 --max-time 60 \
+            --header "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" \
+            "$deployment_url/health" > /tmp/backend-health.json
           python -c 'import json; d=json.load(open("/tmp/backend-health.json")); assert d == {"status":"ok", "database":"connected"}; print("Deployment health passed")'
