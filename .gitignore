@@ -14,3 +14,6 @@ build/
 .DS_Store
 *.log
 .vercel/
+
+# Local secrets for the Agent Core tutorial
+agent_lab/.env
