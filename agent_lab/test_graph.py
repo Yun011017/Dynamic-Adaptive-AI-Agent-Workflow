@@ -1,11 +1,14 @@
 """離線驗證 LangGraph 工具呼叫流程，不會呼叫付費模型 API。"""
 
 import json
+import os
 import unittest
+from unittest.mock import patch
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
 
+import agent_lab.main as agent_main
 from agent_lab.main import build_graph
 
 
@@ -79,6 +82,26 @@ class AgentGraphTest(unittest.TestCase):
         resumed = graph.invoke(Command(resume={"action": "reject"}), config=config)
         self.assertEqual(resumed["review_status"], "rejected")
         self.assertNotIn("approved_draft", resumed)
+
+
+class ModelProviderTest(unittest.TestCase):
+    def test_factory_supports_gemini_openai_and_claude(self):
+        providers = [
+            ("gemini", "ChatGoogleGenerativeAI", "GEMINI_MODEL"),
+            ("openai", "ChatOpenAI", "OPENAI_MODEL"),
+            ("claude", "ChatAnthropic", "CLAUDE_MODEL"),
+        ]
+        for provider, model_class_name, model_setting in providers:
+            with self.subTest(provider=provider):
+                with (
+                    patch.object(agent_main, "MODEL_PROVIDER", provider),
+                    patch.object(agent_main.getpass, "getpass", return_value="test-key"),
+                    patch.dict(os.environ, {}, clear=False),
+                ):
+                    model, model_name = agent_main.build_model()
+                    model.bind_tools([agent_main.get_form_summary])
+                self.assertEqual(type(model).__name__, model_class_name)
+                self.assertEqual(model_name, getattr(agent_main, model_setting))
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from uuid import uuid4
 from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from langchain.tools import tool
 from google.genai.errors import APIError as GeminiAPIError
 from langgraph.checkpoint.memory import InMemorySaver
@@ -16,14 +17,17 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.types import Command, interrupt
 from openai import APIError as OpenAIAPIError
+from anthropic import APIError as AnthropicAPIError
 
 
 # 想切換模型時，先改這一區：
-# MODEL_PROVIDER 可填 "gemini" 或 "openai"。
+# MODEL_PROVIDER 可填 "gemini"、"openai" 或 "claude"。
+# 也可以在啟動程式時設定環境變數 MODEL_PROVIDER；預設使用 Gemini。
 # 同一服務內要換型號，只需修改該服務的模型名稱。
-MODEL_PROVIDER = "gemini"
+MODEL_PROVIDER = os.getenv("MODEL_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = "gemini-3.5-flash-lite"
-OPENAI_MODEL = "gpt-6-luna"
+OPENAI_MODEL = "gpt-5-nano"
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 QUESTION = "請分析報名摘要，提出一項 Instagram 宣傳建議，並說明資料依據。"
 SYSTEM_PROMPT = (
     "你是 NTUMaker 的行銷分析助理，請用繁體中文。"
@@ -79,12 +83,26 @@ def build_model():
         return ChatOpenAI(
             model=OPENAI_MODEL,
             use_responses_api=True,
-            reasoning_effort="none",
             timeout=20,
             max_retries=0,
         ), OPENAI_MODEL
 
-    raise SystemExit('MODEL_PROVIDER 請設定為 "gemini" 或 "openai"。')
+    if MODEL_PROVIDER == "claude":
+        api_key = getpass.getpass(
+            "請輸入 Anthropic Claude API key（輸入時不會顯示；API 呼叫可能會收費）："
+        )
+        if not api_key.strip():
+            raise SystemExit("沒有輸入 API key，程式已停止。")
+        os.environ["ANTHROPIC_API_KEY"] = api_key.strip()
+        return ChatAnthropic(
+            model=CLAUDE_MODEL,
+            timeout=20,
+            max_retries=0,
+        ), CLAUDE_MODEL
+
+    raise SystemExit(
+        'MODEL_PROVIDER 請設定為 "gemini"、"openai" 或 "claude"。'
+    )
 
 
 def build_graph(model):
@@ -189,6 +207,8 @@ def main() -> None:
         raise SystemExit(f"Gemini API 回報錯誤（{error.code}）：{error.message}") from None
     except OpenAIAPIError as error:
         raise SystemExit(f"OpenAI API 回報錯誤：{error}") from None
+    except AnthropicAPIError as error:
+        raise SystemExit(f"Anthropic Claude API 回報錯誤：{error}") from None
 
     print("\n工具呼叫紀錄：")
     for message in result["messages"]:

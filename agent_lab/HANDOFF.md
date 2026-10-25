@@ -41,9 +41,27 @@ agent_lab\.venv\Scripts\python.exe -m unittest discover -s agent_lab -p "test_gr
 agent_lab\.venv\Scripts\python.exe agent_lab\main.py
 ```
 
-前三行安裝並執行離線測試；最後一行才會呼叫真實 Gemini。預期兩個測試皆 `ok`，最後顯示 `OK`。離線測試不需要 API key。
+先建立環境並安裝依賴，再單獨執行 unittest 指令即可做離線測試。預期三個測試皆 `ok`，最後顯示 `OK`；這一步不需要 API key。只有最後的 `main.py` 指令會呼叫所選模型。
 
-使用者需自行準備可用的 Google AI Studio API key；程式提示時在終端機輸入。輸入不會顯示字元。草稿出現後可輸入 `a` 核准、`e` 修改後核准或 `r` 拒絕；修改時輸入完整新草稿，空白行結束。這會呼叫 Gemini API，可能受帳戶方案與用量限制。
+模型預設為 Gemini。可在啟動時用 `MODEL_PROVIDER` 選擇 `gemini`、`openai` 或 `claude`；每家各使用自己的 API key，程式提示時在終端機輸入，字元不會顯示。草稿出現後可輸入 `a` 核准、`e` 修改後核准或 `r` 拒絕。真實 Gemini 已驗證；OpenAI 和 Claude 已完成 model 初始化及工具綁定測試，但尚未用真實 API key 呼叫。模型 API 可能依帳戶方案計費或受用量限制。
+
+macOS／Linux 切換例子（只對這次執行生效）：
+
+```bash
+MODEL_PROVIDER=gemini agent_lab/.venv/bin/python agent_lab/main.py
+MODEL_PROVIDER=openai agent_lab/.venv/bin/python agent_lab/main.py
+MODEL_PROVIDER=claude agent_lab/.venv/bin/python agent_lab/main.py
+```
+
+Windows PowerShell 切換例子：
+
+```powershell
+$env:MODEL_PROVIDER = "claude"
+agent_lab\.venv\Scripts\python.exe agent_lab\main.py
+Remove-Item Env:MODEL_PROVIDER
+```
+
+也可以在 `main.py` 頂端設定區修改模型名稱：目前範例分別是 `gemini-3.5-flash-lite`、`gpt-5-nano`、`claude-haiku-4-5-20251001`。模型名稱需是供應商帳戶可用且支援工具呼叫的型號。
 
 ## 程式導覽
 
@@ -58,7 +76,7 @@ agent_lab\.venv\Scripts\python.exe agent_lab\main.py
 2. `InMemorySaver` 只在同一程序期間保存狀態。關閉或重啟程式後，待審流程無法恢復。
 3. 審核狀態與草稿尚未寫入 Neon；目前命令列審核通過不代表後端資料庫有記錄。
 4. 目前沒有外部副作用：不會發布 Instagram、不會修改表單、不會自動執行其他工作。
-5. OpenAI connector 雖列在依賴中，但目前主流程的已驗證模型是 Gemini；OpenAI 未驗證。
+5. Gemini、OpenAI、Claude provider 均已配置；目前只有 Gemini 的真實模型和工具呼叫完成驗證，OpenAI／Claude 尚未做真實 API 測試。
 
 ## 下一位負責人的起點
 
@@ -79,3 +97,5 @@ Agent 狀態中的 `interrupt` 僅負責流程暫停／恢復，不能取代後�
 把本文件列出的 Agent Core 變更提交並推送後，隊友在自己的 clone 執行 `git pull origin main`，再依「本機安裝與操作」建立自己的虛擬環境。API key 不會隨 Git 傳遞；每位需要跑真實模型的人都要透過核准的團隊流程取得自己的 key。不要把 key 貼在聊天、commit、issue 或程式檔。
 
 接手者可用 `git log -1 --oneline` 確認目前版本，並先跑離線測試；測試通過後再自行決定是否使用自己的 API key 執行 Gemini。
+
+官方整合文件：[Gemini](https://docs.langchain.com/oss/python/integrations/chat/google_generative_ai)、[OpenAI](https://docs.langchain.com/oss/python/integrations/chat/openai)、[Claude](https://docs.langchain.com/oss/python/integrations/chat/anthropic)。Claude connector 固定為 `langchain-anthropic==1.7.6`。
