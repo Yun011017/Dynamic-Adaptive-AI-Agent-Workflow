@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     db_connect_timeout: int = Field(default=10, ge=1, le=30)
     agent_provider: Literal["local"] = "local"
     agent_model: str = "deterministic-langgraph"
+    agent_worker_poll_seconds: int = Field(default=2, ge=1, le=60)
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parents[1] / ".env",

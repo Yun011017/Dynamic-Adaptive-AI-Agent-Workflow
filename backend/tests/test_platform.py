@@ -25,6 +25,7 @@ settings.platform_api_key = "integration-test-key"
 settings.platform_workspace_slug = "development"
 
 from app.db import engine, SessionLocal
+from app.agent_worker import process_one_run
 from app.main import app
 from app.models import AgentRun, Workspace, Goal, Strategy, Execution, ExternalEvent, Observation, Member
 from app.retry import read_with_retry
@@ -153,10 +154,14 @@ class PlatformTests(unittest.TestCase):
                 "constraints": {"channel": "instagram"},
             },
         )
-        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.status_code, 202, response.text)
         run = response.json()
-        self.assertEqual(run["status"], "COMPLETED")
+        self.assertEqual(run["status"], "PENDING")
         self.assertEqual(run["agent_provider"], "local")
+        self.assertIsNone(run["output_payload"])
+        self.assertEqual(process_one_run(), run["run_id"])
+        run = self.client.get(f"/agent/runs/{run['run_id']}", headers=self.headers).json()
+        self.assertEqual(run["status"], "COMPLETED")
         self.assertEqual(run["output_payload"]["data_source"], "synthetic_form_summary")
         self.assertEqual(
             self.client.get(f"/agent/runs/{run['run_id']}", headers=self.headers).status_code,

@@ -1,6 +1,5 @@
 import hmac
 import uuid
-from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -12,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import engine, get_db
-from .agent_runner import run_agent
 from .models import AgentRun, Execution, Goal, Strategy, Workspace
 from .retry import read_with_retry
 from .schemas import AgentRunCreate, AgentRunRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead
@@ -128,32 +126,19 @@ def get_execution(execution_id: int, db: DB, tenant: Tenant):
     return scoped(db, Execution, execution_id, tenant)
 
 
-@app.post("/agent/runs", response_model=AgentRunRead, status_code=201)
+@app.post("/agent/runs", response_model=AgentRunRead, status_code=202)
 def create_agent_run(data: AgentRunCreate, db: DB, tenant: Tenant):
-    """Run the bounded development graph and persist the full run record."""
+    """Queue an Agent run for a separate worker; HTTP never waits for model work."""
     input_payload = data.model_dump()
     row = AgentRun(
         workspace_id=tenant,
         run_id=str(uuid.uuid4()),
-        status="RUNNING",
+        status="PENDING",
         input_payload=input_payload,
         agent_provider=settings.agent_provider,
         agent_model=settings.agent_model,
-        started_at=datetime.now(timezone.utc),
     )
     db.add(row)
-    db.commit()
-    db.refresh(row)
-    try:
-        row.output_payload = run_agent(
-            goal=data.goal, context=data.context, constraints=data.constraints
-        )
-        row.status = "COMPLETED"
-    except Exception:
-        row.status = "FAILED"
-        row.error_code = "AGENT_RUN_FAILED"
-        row.error_message = "Agent run could not be completed"
-    row.finished_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(row)
     return row

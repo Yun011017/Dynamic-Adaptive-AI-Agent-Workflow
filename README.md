@@ -81,7 +81,7 @@ cd backend
 
 ### Agent 整合測試
 
-第一版的 `POST /agent/runs` 會執行一個不需模型 API key 的 LangGraph 測試流程：讀取固定的表單摘要、依最高偏好產生行銷建議，並將完整輸入、輸出、狀態與錯誤寫入 Neon 的 `agent_runs`。可在 `/docs` 使用下列內容測試：
+`POST /agent/runs` 只建立待執行工作並立刻回傳 `run_id` 與 `PENDING` 狀態；它不會在 HTTP 請求中等待 Agent。背景 worker 會從 Neon 取出工作、執行不需模型 API key 的 LangGraph 測試流程，並把輸入、輸出、狀態與錯誤寫入 `agent_runs`。可在 `/docs` 使用下列內容建立工作：
 
 ```json
 {
@@ -91,6 +91,13 @@ cd backend
 }
 ```
 
-這個端點只產生測試建議，不會呼叫 Gemini、OpenAI、Claude、Google Sheets 或 Instagram，也不會發布內容。`AGENT_PROVIDER=local` 與 `AGENT_MODEL=deterministic-langgraph` 是目前唯一支援的後端設定；真正模型 API key 將只交給後續的背景 worker，不應放進前端或 API 回應。
+開啟另一個 CMD 視窗，在專案根目錄啟動 worker：
+
+```bat
+cd backend
+..\.venv\Scripts\python.exe -m app.agent_worker
+```
+
+只想處理一筆工作後結束時，加上 `--once`。Worker 使用 `FOR UPDATE SKIP LOCKED` 取得工作，可同時啟動多個 worker 而不會重複執行同一筆 run。這個版本只產生測試建議，不會呼叫 Gemini、OpenAI、Claude、Google Sheets 或 Instagram，也不會發布內容。`AGENT_PROVIDER=local` 與 `AGENT_MODEL=deterministic-langgraph` 是目前唯一支援的後端設定；真正模型 API key 將只交給後續的模型 worker，不應放進前端或 API 回應。
 
 啟動 API 不會自動建表，也不會執行 seed；必須先跑 migration。`seed` 只建立虛構資料，不會發文或執行 Agent。
