@@ -112,3 +112,30 @@ cd backend
 前端只會呼叫 FastAPI，不會直接連 Neon。開發用 API key 只存於目前瀏覽器分頁，關閉分頁後即清除。
 
 各模組的專用設定、驗證紀錄與下一位接手事項，請閱讀 [`docs/handoffs/`](docs/handoffs/)；新增交接文件時不要覆蓋既有內容。
+
+## 部署
+
+後端 FastAPI 已部署於 Vercel：
+[https://dynamic-adaptive-ai-agent-workflow-api.vercel.app/](https://dynamic-adaptive-ai-agent-workflow-api.vercel.app/)
+
+前端已部署至 Vercel：
+[https://dynamic-adaptive-ai-agent-workflow.vercel.app/](https://dynamic-adaptive-ai-agent-workflow.vercel.app/)
+
+## GitHub Actions Agent worker
+
+[`agent-worker.yml`](.github/workflows/agent-worker.yml) 每次只處理一筆等待中的 Agent 工作後結束，不需要讓電腦持續開著。
+
+前端建立工作後，資料會先以 `PENDING` 狀態寫入 Neon；GitHub Actions 每 5 分鐘檢查一次：
+
+- 有 `PENDING` 工作：執行 Agent，並把結果與狀態寫回 Neon。
+- 沒有工作：正常結束，不進行任何處理。
+
+因此工作通常會在 0 至 5 分鐘內開始；GitHub 排程繁忙時可能更久。公開 repository 使用 GitHub 標準 runner 不收執行分鐘費用，詳見 [GitHub Actions 計費說明](https://docs.github.com/en/actions/concepts/billing-and-usage)。
+
+啟用前，到 GitHub repository 的 **Settings → Secrets and variables → Actions** 設定：
+
+- Secret `NEON_DATABASE_URL`：Neon 的 `DATABASE_URL`。
+- Secret `GOOGLE_API_KEY`：Gemini API key。
+- Variable `ENABLE_AGENT_WORKER`：設為 `true`，才會啟用每 5 分鐘的排程。
+
+可在 **Actions → Process queued Agent work → Run workflow** 手動執行一次來測試。只有信任的 repository 寫入者可修改 workflow；所有 key 都應維持在 GitHub Secrets，且已外露的 key 必須先旋轉後再設定。

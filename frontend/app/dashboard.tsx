@@ -338,7 +338,7 @@ export default function Dashboard() {
             onSubmit={save}
             className="w-full max-w-lg rounded-2xl bg-maker-paper p-6 shadow-2xl"
           >
-            <h2 className="mt-0 text-2xl">後端連線設定</h2>
+            <h2 className="mt-0 text-2xl pb-4">後端連線設定</h2>
             <div className="space-y-4">
               <Field label="FastAPI URL">
                 <input
