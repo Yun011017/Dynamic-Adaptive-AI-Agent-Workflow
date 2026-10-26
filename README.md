@@ -28,13 +28,16 @@ Meta API 沙盒的設定獨立放在 `backend/meta_api_test/.env`，範本為同
 
 ### 第一次初始化
 
-第一次才需要建立虛擬環境、安裝套件與建立設定檔：
+第一次請在專案根目錄開啟 CMD，完成前後端初始化：
 
 ```bat
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
 if not exist backend\.env copy backend\.env.example backend\.env
-notepad backend\.env
+if not exist frontend\.env copy frontend\.env.example frontend\.env
+cd frontend
+npm install
+cd ..
 ```
 
 在 Neon Connect 複製連線資訊後設定：
@@ -43,7 +46,6 @@ notepad backend\.env
 - `MIGRATION_DATABASE_URL`：同一 Neon database 的 direct 連線，migration 使用；可由 Neon Connect 關閉 pooling 取得。不能連到另一個 database。
 - `PLATFORM_API_KEY`：至少 32 字元的隨機開發用金鑰；不設定則所有業務 API 停用，`/health` 仍可測試。
 - `PLATFORM_WORKSPACE_SLUG=development`：金鑰只能存取此工作空間，不接受前端指定任意 workspace。
-- `DB_POOL_MODE=null`：本機與 Vercel HTTP API 預設不保留應用連線池；獨立 worker 可設 `queue`。
 
 產生開發金鑰的 CMD 指令（將輸出貼入 `.env`，不要放入 Git／前端）：
 
@@ -51,58 +53,46 @@ notepad backend\.env
 .venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-設定好 `.env` 後，執行一次資料庫初始化：
+設定好 `backend/.env` 後，執行一次資料庫初始化：
 
 ```bat
 cd backend
 ..\.venv\Scripts\python.exe -m scripts.manage migrate
 ..\.venv\Scripts\python.exe -m scripts.manage seed
 ..\.venv\Scripts\python.exe -m scripts.manage check
+cd ..
 ```
-
-三個指令都沒有顯示錯誤後，再啟動後端：
-
-```bat
-..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-看到 `Uvicorn running on http://127.0.0.1:8000` 就代表後端已啟動。開啟 [API 文件](http://localhost:8000/docs) 與 [健康檢查](http://localhost:8000/health)。`/health` 顯示 `ok` 代表 FastAPI 已連到 Neon。按 `Ctrl+C` 停止後端。
 
 ### 平常啟動
 
-已經做過第一次初始化時，只需開啟 cmd、進入專案後執行：
+已完成第一次初始化後，開啟兩個 CMD 視窗：一個啟動後端，一個啟動前端。
+
+後端 CMD：
 
 ```bat
 cd backend
 ..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-在 `/docs` 的 **Authorize** 填入 `.env` 的 `PLATFORM_API_KEY`，才能操作業務 API。
-
-### 前端操作介面
-
-前端可建立 Agent 工作、查看背景 worker 的執行狀態與讀取完成結果。請開啟第二個 CMD 視窗，第一次先安裝前端套件：
-
-```bat
-cd frontend
-if not exist .env copy .env.example .env
-npm install
-npm run dev
-```
-
-之後只需執行：
+前端 CMD：
 
 ```bat
 cd frontend
 npm run dev
 ```
 
-開啟 [http://localhost:3000](http://localhost:3000)，按右上角「連線設定」，填入：
+看到 `Uvicorn running on http://127.0.0.1:8000` 就代表後端已啟動。開啟 [API 文件](http://localhost:8000/docs) 與 [健康檢查](http://localhost:8000/health)；`/health` 顯示 `ok` 代表 FastAPI 已連到 Neon。按 `Ctrl+C` 可停止對應的服務。
+
+前端可建立 Agent 工作、查看背景 worker 的執行狀態與讀取完成結果。開啟 [http://localhost:3000](http://localhost:3000)，按右上角「連線設定」，填入：
 
 - FastAPI URL：`http://127.0.0.1:8000`
 - Development API key：`backend/.env` 的 `PLATFORM_API_KEY`
 
-若要讓工作實際由 Agent 處理，另開第三個 CMD 視窗：
+在 `/docs` 的 **Authorize** 同樣填入 `backend/.env` 的 `PLATFORM_API_KEY`，才能操作業務 API。
+
+### 本機立即處理 Agent 工作（選用）
+
+GitHub Actions 排程外，若要在本機立刻處理等待中的工作，可再開第三個 CMD：
 
 ```bat
 cd backend
@@ -110,8 +100,6 @@ cd backend
 ```
 
 前端只會呼叫 FastAPI，不會直接連 Neon。開發用 API key 只存於目前瀏覽器分頁，關閉分頁後即清除。
-
-各模組的專用設定、驗證紀錄與下一位接手事項，請閱讀 [`docs/handoffs/`](docs/handoffs/)；新增交接文件時不要覆蓋既有內容。
 
 ## 部署
 
@@ -131,11 +119,3 @@ cd backend
 - 沒有工作：正常結束，不進行任何處理。
 
 因此工作通常會在 0 至 5 分鐘內開始；GitHub 排程繁忙時可能更久。公開 repository 使用 GitHub 標準 runner 不收執行分鐘費用，詳見 [GitHub Actions 計費說明](https://docs.github.com/en/actions/concepts/billing-and-usage)。
-
-啟用前，到 GitHub repository 的 **Settings → Secrets and variables → Actions** 設定：
-
-- Secret `NEON_DATABASE_URL`：Neon 的 `DATABASE_URL`。
-- Secret `GOOGLE_API_KEY`：Gemini API key。
-- Variable `ENABLE_AGENT_WORKER`：設為 `true`，才會啟用每 5 分鐘的排程。
-
-可在 **Actions → Process queued Agent work → Run workflow** 手動執行一次來測試。只有信任的 repository 寫入者可修改 workflow；所有 key 都應維持在 GitHub Secrets，且已外露的 key 必須先旋轉後再設定。
