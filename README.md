@@ -81,7 +81,7 @@ cd backend
 
 ### Agent 整合測試
 
-`POST /agent/runs` 只建立待執行工作並立刻回傳 `run_id` 與 `PENDING` 狀態；它不會在 HTTP 請求中等待 Agent。背景 worker 會從 Neon 取出工作、執行不需模型 API key 的 LangGraph 測試流程，並把輸入、輸出、狀態與錯誤寫入 `agent_runs`。可在 `/docs` 使用下列內容建立工作：
+`POST /agent/runs` 只建立待執行工作並立刻回傳 `run_id` 與 `PENDING` 狀態；它不會在 HTTP 請求中等待 Agent。背景 worker 會從 Neon 取出工作、執行 LangGraph，並把輸入、輸出、狀態與錯誤寫入 `agent_runs`。每次狀態轉換也會寫入 `agent_run_checkpoints`，讓逾時的 `RUNNING` 工作能由另一個 worker 接手。可在 `/docs` 使用下列內容建立工作：
 
 ```json
 {
@@ -98,6 +98,16 @@ cd backend
 ..\.venv\Scripts\python.exe -m app.agent_worker
 ```
 
-只想處理一筆工作後結束時，加上 `--once`。Worker 使用 `FOR UPDATE SKIP LOCKED` 取得工作，可同時啟動多個 worker 而不會重複執行同一筆 run。這個版本只產生測試建議，不會呼叫 Gemini、OpenAI、Claude、Google Sheets 或 Instagram，也不會發布內容。`AGENT_PROVIDER=local` 與 `AGENT_MODEL=deterministic-langgraph` 是目前唯一支援的後端設定；真正模型 API key 將只交給後續的模型 worker，不應放進前端或 API 回應。
+只想處理一筆工作後結束時，加上 `--once`。Worker 使用 `FOR UPDATE SKIP LOCKED` 取得工作，可同時啟動多個 worker 而不會重複執行同一筆 run。
+
+預設 `AGENT_PROVIDER=local`，只產生測試建議，不會呼叫 Gemini、OpenAI、Claude、Google Sheets 或 Instagram，也不會發布內容。要測試真實模型時，僅在 worker 的 `backend/.env` 設定 provider、可用的 model 名稱與其對應 API key，例如：
+
+```text
+AGENT_PROVIDER=gemini
+AGENT_MODEL=gemini-3.5-flash-lite
+GOOGLE_API_KEY=AIza...
+```
+
+可改用 `openai`／`OPENAI_API_KEY` 或 `claude`／`ANTHROPIC_API_KEY`。模型 key 不會進入 API request、Neon payload、log 或前端；不要提交 `backend/.env`。等待人工審核的流程仍需由 Agent Core 提供可恢復的審核 graph，平台 worker 已保存可用的 run checkpoint。
 
 啟動 API 不會自動建表，也不會執行 seed；必須先跑 migration。`seed` 只建立虛構資料，不會發文或執行 Agent。

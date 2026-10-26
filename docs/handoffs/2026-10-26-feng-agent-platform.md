@@ -26,6 +26,20 @@ API 端點需在 `/docs` 的 Authorize 填入 `backend/.env` 的 `PLATFORM_API_K
 
 此階段不讀取模型 API key。`agent_lab/` 的 Gemini、OpenAI、Claude key 仍只透過其終端機提示輸入，不能提交 Git。
 
+## 背景 Worker 與模型整合
+
+- `POST /agent/runs` 建立 `PENDING` 工作並回傳 `202 Accepted`，不在 HTTP request 內執行模型。
+- `backend/app/agent_worker.py` 使用 `FOR UPDATE SKIP LOCKED` 取得工作、標示 `RUNNING`、執行 LangGraph，最後寫回 `COMPLETED` 或 `FAILED`。
+- `agent_run_checkpoints` 保存 `RUNNING` 與結束狀態；超過 `AGENT_RUN_LEASE_SECONDS` 的 `RUNNING` 工作可由另一個 worker 接手。
+- 預設 `local` provider 不需 API key。Gemini、OpenAI、Claude 會由 worker 讀取自己的環境變數 key，並用與 `agent_lab` 相同的工具呼叫模式執行。
+
+在 CMD 啟動 worker：
+
+```bat
+cd backend
+..\.venv\Scripts\python.exe -m app.agent_worker
+```
+
 ## 已知限制與下一步
 
-`POST /agent/runs` 目前同步完成一個短且無外部副作用的測試圖。下一位若要接真實模型，應先將 `agent_lab` 的互動式 graph 改為可注入 provider 的背景 worker；由 worker 持有模型 API key，並在 Neon 保存 job/checkpoint。不要把長時間模型呼叫、人工審核等待或發文動作留在 FastAPI HTTP request 裡。
+目前模型 graph 僅完成「讀取測試表單摘要 → 產生建議」。Agent Core 負責人仍需提供能等待並恢復人工審核的非互動式 graph；平台端再把該 graph 注入 worker。不要把長時間模型呼叫、審核等待或發文動作留在 FastAPI HTTP request 裡。

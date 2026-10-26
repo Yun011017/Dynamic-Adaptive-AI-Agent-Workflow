@@ -5,22 +5,28 @@ only PENDING records, so multiple workers can poll the same Neon database.
 """
 import argparse
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .agent_runner import run_agent
 from .config import settings
 from .db import SessionLocal
-from .models import AgentRun
+from .models import AgentRun, AgentRunCheckpoint
 
 
 def claim_next_run(db: Session) -> AgentRun | None:
-    """Atomically move one waiting run to RUNNING, skipping another worker's lock."""
+    """Claim a waiting or stale run, skipping another worker's row lock."""
+    stale_before = datetime.now(timezone.utc) - timedelta(
+        seconds=settings.agent_run_lease_seconds
+    )
     row = db.scalars(
         select(AgentRun)
-        .where(AgentRun.status == "PENDING")
+        .where(or_(
+            AgentRun.status == "PENDING",
+            (AgentRun.status == "RUNNING") & (AgentRun.started_at < stale_before),
+        ))
         .order_by(AgentRun.created_at, AgentRun.id)
         .with_for_update(skip_locked=True)
         .limit(1)
@@ -29,9 +35,28 @@ def claim_next_run(db: Session) -> AgentRun | None:
         return None
     row.status = "RUNNING"
     row.started_at = datetime.now(timezone.utc)
+    row.attempts += 1
+    row.next_retry_at = None
     db.commit()
     db.refresh(row)
     return row
+
+
+def checkpoint(db: Session, row: AgentRun, phase: str, state_payload: dict) -> None:
+    sequence = db.scalar(
+        select(func.coalesce(func.max(AgentRunCheckpoint.sequence), 0) + 1).where(
+            AgentRunCheckpoint.workspace_id == row.workspace_id,
+            AgentRunCheckpoint.agent_run_id == row.id,
+        )
+    )
+    db.add(AgentRunCheckpoint(
+        workspace_id=row.workspace_id,
+        agent_run_id=row.id,
+        sequence=sequence,
+        phase=phase,
+        state_payload=state_payload,
+    ))
+    db.commit()
 
 
 def process_one_run() -> str | None:
@@ -41,11 +66,14 @@ def process_one_run() -> str | None:
         if row is None:
             return None
         payload = row.input_payload
+        checkpoint(db, row, "RUNNING", {"input": payload, "attempt": row.attempts})
         try:
             row.output_payload = run_agent(
                 goal=payload["goal"],
                 context=payload.get("context", ""),
                 constraints=payload.get("constraints", {}),
+                provider=row.agent_provider,
+                model_name=row.agent_model,
             )
             row.status = "COMPLETED"
         except Exception:
@@ -54,6 +82,10 @@ def process_one_run() -> str | None:
             row.error_message = "Agent run could not be completed"
         row.finished_at = datetime.now(timezone.utc)
         db.commit()
+        checkpoint(db, row, row.status, {
+            "error_code": row.error_code,
+            "output_saved": row.output_payload is not None,
+        })
         return row.run_id
 
 

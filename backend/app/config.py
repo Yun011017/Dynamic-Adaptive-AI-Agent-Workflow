@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,9 +12,13 @@ class Settings(BaseSettings):
     platform_workspace_slug: str = "development"
     db_pool_mode: Literal["null", "queue"] = "null"
     db_connect_timeout: int = Field(default=10, ge=1, le=30)
-    agent_provider: Literal["local"] = "local"
+    agent_provider: Literal["local", "gemini", "openai", "claude"] = "local"
     agent_model: str = "deterministic-langgraph"
     agent_worker_poll_seconds: int = Field(default=2, ge=1, le=60)
+    agent_run_lease_seconds: int = Field(default=300, ge=30, le=3600)
+    google_api_key: SecretStr | None = None
+    openai_api_key: SecretStr | None = None
+    anthropic_api_key: SecretStr | None = None
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parents[1] / ".env",

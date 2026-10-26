@@ -27,7 +27,7 @@ settings.platform_workspace_slug = "development"
 from app.db import engine, SessionLocal
 from app.agent_worker import process_one_run
 from app.main import app
-from app.models import AgentRun, Workspace, Goal, Strategy, Execution, ExternalEvent, Observation, Member
+from app.models import AgentRun, AgentRunCheckpoint, Workspace, Goal, Strategy, Execution, ExternalEvent, Observation, Member
 from app.retry import read_with_retry
 
 
@@ -142,7 +142,7 @@ class PlatformTests(unittest.TestCase):
     def test_09_repeated_migrate(self):
         command.upgrade(self.config,"head")
         with engine.connect() as c:
-            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0003")
+            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0004")
 
     def test_10_agent_run_is_saved_and_scoped(self):
         response = self.client.post(
@@ -169,6 +169,8 @@ class PlatformTests(unittest.TestCase):
         )
         with SessionLocal() as db:
             self.assertEqual(db.query(AgentRun).filter_by(run_id=run["run_id"]).one().status, "COMPLETED")
+            phases = [checkpoint.phase for checkpoint in db.query(AgentRunCheckpoint).order_by(AgentRunCheckpoint.sequence).all()]
+            self.assertEqual(phases, ["RUNNING", "COMPLETED"])
 
 
 if __name__ == "__main__":

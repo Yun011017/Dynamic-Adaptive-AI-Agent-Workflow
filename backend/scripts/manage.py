@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.pool import NullPool
 from app.config import settings
@@ -37,11 +38,12 @@ def run(action):
             c.execute(text("SELECT 1"))
             revision = c.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
             tables = set(inspect(c).get_table_names())
-            expected = {"workspaces","members","goals","strategies","executions","execution_actions","observations","external_events"}
-            if not expected <= tables or revision != "0002":
+            expected = {"workspaces","members","goals","strategies","executions","execution_actions","observations","external_events","agent_runs","agent_run_checkpoints"}
+            expected_revision = ScriptDirectory.from_config(config).get_current_head()
+            if not expected <= tables or revision != expected_revision:
                 raise RuntimeError("Schema not up to date")
             count = c.execute(text("SELECT count(*) FROM goals g JOIN workspaces w ON w.id=g.workspace_id JOIN strategies s ON s.goal_id=g.id AND s.workspace_id=g.workspace_id JOIN executions e ON e.strategy_id=s.id AND e.workspace_id=s.workspace_id WHERE w.slug='development' AND g.title='[seed] Club campaign' AND s.version=1")).scalar_one()
-            print(f"Database connected; migration={revision}; core tables=8; seed chains={count}")
+            print(f"Database connected; migration={revision}; core tables={len(expected)}; seed chains={count}")
     else:
         raise ValueError("Use migrate, seed, check or baseline-legacy")
     engine.dispose()

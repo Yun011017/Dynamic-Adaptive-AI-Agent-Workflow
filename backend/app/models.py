@@ -73,12 +73,30 @@ class AgentRun(TenantRow, Base):
     error_message: Mapped[str | None] = mapped_column(Text)
     agent_provider: Mapped[str] = mapped_column(String(32), server_default="local")
     agent_model: Mapped[str] = mapped_column(String(128), server_default="deterministic-langgraph")
+    attempts: Mapped[int] = mapped_column(Integer, server_default="0")
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         UniqueConstraint("run_id"),
         UniqueConstraint("workspace_id", "id"),
         CheckConstraint("status IN ('PENDING','RUNNING','COMPLETED','FAILED')", name="ck_agent_runs_status"),
+    )
+
+
+class AgentRunCheckpoint(TenantRow, Base):
+    __tablename__ = "agent_run_checkpoints"
+    agent_run_id: Mapped[int] = mapped_column(BigInteger)
+    sequence: Mapped[int] = mapped_column(Integer)
+    phase: Mapped[str] = mapped_column(String(32))
+    state_payload: Mapped[dict] = mapped_column(JSON, server_default="{}")
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "agent_run_id"],
+            ["agent_runs.workspace_id", "agent_runs.id"],
+        ),
+        UniqueConstraint("workspace_id", "agent_run_id", "sequence"),
+        CheckConstraint("sequence > 0", name="ck_agent_run_checkpoints_sequence"),
     )
 
 
