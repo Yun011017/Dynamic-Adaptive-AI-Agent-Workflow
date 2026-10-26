@@ -2,12 +2,11 @@
 
 ## 目前狀態
 
-- GitHub `main` 已加入 `.github/workflows/agent-worker.yml`，取代需要常駐付費主機的 Render worker 方案；Render 不需要建立或維護 worker。
+- GitHub `main` 已加入 `.github/workflows/agent-worker.yml`，以排程方式執行 worker，不需要常駐主機。
 - Workflow 每 5 分鐘排程一次，使用 GitHub-hosted runner 執行 `python -m app.agent_worker --once`，每次最多處理一筆工作後結束。排程可能因 GitHub 忙碌而延遲；佇列有多筆工作時，每次執行只處理一筆。
 - `ENABLE_AGENT_WORKER=true` 已設為 repository variable，定時執行已啟用；`workflow_dispatch` 可手動測試。
 - GitHub Actions repository secrets 已存在 `NEON_DATABASE_URL` 與 `GOOGLE_API_KEY`。僅記錄名稱與存在狀態，不記錄或輸出其值。
 - GitHub 上 `Process queued Agent work` 手動 workflow run 已成功完成，必要 secret 檢查與 worker 命令皆成功。該次記錄沒有顯示 `Processed Agent run: ...`，因此不能據此宣稱它實際處理過佇列工作或驗證過真實模型呼叫。
-- Render Blueprint `render.yaml` 仍在 repository 中作為舊方案記錄；目前部署不依賴它。
 
 ## Workflow 設定
 

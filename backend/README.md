@@ -1,10 +1,10 @@
 # 後端
 
-FastAPI、Neon migration 與 Agent worker 位於此目錄。後端設定只放 `backend/.env`，不要提交。
+此目錄包含 FastAPI API、Neon migration 與 Agent worker 程式。後端負責驗證請求、存取 Neon、建立 Agent 工作與回傳執行結果；前端不會直接連資料庫。
 
 ---
 
-以下為既有技術備註；日後新增內容請優先寫入 `docs/`，不要把此 README 擴充成完整規格書。
+以下為維護 migration、資料表與部署時的技術備註。
 
 ## Migration
 
@@ -45,42 +45,6 @@ FastAPI、Neon migration 與 Agent worker 位於此目錄。後端設定只放 `
 - session 隨每個 request 結束關閉，未完成交易回滾；寫入失敗不自動重試，避免重複副作用。
 - `app/retry.py` 只提供可安全重做的讀取操作重試：初次失敗後最多 3 次，2／4／8 秒加 jitter；只重試連線／暫時不可用錯誤。發布、審核消耗、付款不得使用此 helper。
 - `/health` 不在 HTTP request 內多次重試，連線 timeout 預設 10 秒，交由監控／呼叫端稍後重試。
-- Vercel API 預設 NullPool＋Neon pooled URL，避免每個 function instance 保留連線。
-- 長駐程式 `DB_POOL_MODE=queue` 使用 pool_size=2、max_overflow=0、pool_timeout=10；`pool_pre_ping` 檢查連線，connect timeout 可設定 1–30 秒。
+- Vercel API 預設以 NullPool 搭配 Neon pooled URL，避免每個 function instance 保留連線。
+- GitHub Actions worker 的連線與執行設定集中在 `.github/workflows/agent-worker.yml`，不放進本機或 Vercel 環境變數。
 - 不在資料庫交易內等人工審核或長時間外部 API。
-
-## Vercel development Project
-
-本專案是同一 Git repo 的 `backend` 子目錄。建立 Vercel Project 時：
-
-1. 匯入有權存取的 GitHub repo，Root Directory 設為 `backend`，Framework 選 FastAPI。
-2. 在該 development Project 的 Production environment 設定 `DATABASE_URL`（development database pooled URL）、`PLATFORM_API_KEY`、`PLATFORM_WORKSPACE_SLUG=development`、`DB_POOL_MODE=null`。
-3. 不把 `.env` 上傳；`MIGRATION_DATABASE_URL` 僅放 GitHub development environment Secret，runtime 不需要它。
-4. 首次雲端部署前先確認 migration 已套用。開啟部署網址 `/health` 應顯示 connected，再到 `/docs` 測試授權 API。
-
-此處 Vercel 的 `--prod` 指 development Project 的固定部署網址，**不是正式業務 database**。日後 production 需另一組 Project／Secrets／database。
-
-Vercel `git.deploymentEnabled=false` 刻意關閉內建每次 push 自動部署，避免測試或 migration 尚未完成就先上線。由下述 GitHub Actions 控制部署順序；首次匯入可能先產生一次部署，需先把環境變數與 DB migration 準備完成。
-
-### GitHub Actions 配置
-
-需要有 repository 管理設定權限的人，在 GitHub 建立 `development` environment，設定：
-
-| Secret | 用途 |
-| --- | --- |
-| `NEON_DEV_MIGRATION_DATABASE_URL` | development Neon direct URL；CI migration 用 |
-| `VERCEL_TOKEN` | 部署用 Vercel token；依團隊政策管理與撤銷 |
-| `VERCEL_ORG_ID` | 你的 Vercel scope／team ID |
-| `VERCEL_PROJECT_ID` | backend development Project ID |
-
-再設定 repository variable `ENABLE_VERCEL_DEPLOY=true`。未啟用時，workflow 只跑 CI，雲端不被修改。
-
-流程：PR／main → PostgreSQL 隔離測試 → main 的 development job → 檢查 Secrets → Neon migration → 固定版本 Vercel CLI pull／build／deploy → `/health` smoke check。部署 job 串行，migration 失敗就不部署；不在 deployment 自動執行 seed。若 Vercel Deployment Protection 要求登入，健康檢查需由管理者設定專用的自動化通道，不能直接關掉保護來取得測試成功。
-
-CLI 從 repository 根目錄執行，由已連結 Project 的 Root Directory 決定建置 backend；不可把同一專案同時連結到不同 root。`.vercel/` 會保存拉取的設定與 secret，已加入 Git ignore。
-
-此工作流程準備完成不代表 GitHub Secrets、GitHub App 授權或 Vercel Project 已在帳號中建立。Repo 不是你建立的仍可能部署，但要看 GitHub App 存取、repo 類型與 Vercel 方案；私人 repo 的 Hobby 協作有限制，請由有權限的擁有者設定或採符合團隊需求的方案，不修改 commit 身分來規避。
-
-官方依據：[FastAPI](https://vercel.com/docs/frameworks/backend/fastapi)、[GitHub Actions](https://vercel.com/kb/guide/how-can-i-use-github-actions-with-vercel)、[Git 部署設定](https://vercel.com/docs/project-configuration/git-configuration)、[協作限制](https://vercel.com/docs/deployments/troubleshoot-project-collaboration)。
-
-完整本機 CMD 指令與 seed／驗證方式見 [根目錄 README](../README.md)。

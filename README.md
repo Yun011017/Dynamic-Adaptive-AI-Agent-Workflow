@@ -109,6 +109,21 @@ cd backend
 前端已部署至 Vercel：
 [https://dynamic-adaptive-ai-agent-workflow.vercel.app/](https://dynamic-adaptive-ai-agent-workflow.vercel.app/)
 
+### GitHub Actions 部署設定
+
+`.github/workflows/backend.yml` 會先完成隔離資料庫測試、migration，再部署 Vercel 後端。由具 repository 管理權限的人在 GitHub **Settings → Secrets and variables → Actions** 設定：
+
+| 類型 | 名稱 | 用途 |
+| --- | --- | --- |
+| Secret | `NEON_DEV_MIGRATION_DATABASE_URL` | development Neon direct URL，供 migration 使用 |
+| Secret | `VERCEL_TOKEN` | Vercel 自動部署 token |
+| Secret | `VERCEL_ORG_ID` | Vercel scope 或 team ID |
+| Secret | `VERCEL_PROJECT_ID` | 後端 Vercel Project ID |
+| Secret | `VERCEL_AUTOMATION_BYPASS_SECRET` | 部署後 `/health` 自動驗證使用 |
+| Variable | `ENABLE_VERCEL_DEPLOY=true` | 啟用 main 分支的後端自動部署 |
+
+未設定 `ENABLE_VERCEL_DEPLOY=true` 時，GitHub Actions 只執行 CI，不會部署 Vercel。所有 Secret 僅放在 GitHub 或 Vercel 的設定頁面，不可寫進 Git、README 或前端環境變數。
+
 ## GitHub Actions Agent worker
 
 [`agent-worker.yml`](.github/workflows/agent-worker.yml) 每次只處理一筆等待中的 Agent 工作後結束，不需要讓電腦持續開著。
@@ -119,3 +134,13 @@ cd backend
 - 沒有工作：正常結束，不進行任何處理。
 
 因此工作通常會在 0 至 5 分鐘內開始；GitHub 排程繁忙時可能更久。公開 repository 使用 GitHub 標準 runner 不收執行分鐘費用，詳見 [GitHub Actions 計費說明](https://docs.github.com/en/actions/concepts/billing-and-usage)。
+
+在 GitHub **Settings → Secrets and variables → Actions** 另外設定：
+
+| 類型 | 名稱 | 用途 |
+| --- | --- | --- |
+| Secret | `NEON_DATABASE_URL` | worker 連接 Neon |
+| Secret | `GOOGLE_API_KEY` | Gemini 模型呼叫 |
+| Variable | `ENABLE_AGENT_WORKER=true` | 啟用每 5 分鐘排程 |
+
+可到 **Actions → Process queued Agent work → Run workflow** 手動執行一次測試。
