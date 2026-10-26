@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     platform_workspace_slug: str = "development"
     db_pool_mode: Literal["null", "queue"] = "null"
     db_connect_timeout: int = Field(default=10, ge=1, le=30)
+    agent_provider: Literal["local"] = "local"
+    agent_model: str = "deterministic-langgraph"
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parents[1] / ".env",

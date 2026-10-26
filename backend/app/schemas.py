@@ -34,3 +34,25 @@ class ExecutionRead(BaseModel):
     status: str
     result_summary: str | None
     created_at: datetime
+
+
+class AgentRunCreate(BaseModel):
+    goal: str = Field(min_length=1, max_length=500)
+    context: str = Field(default="", max_length=4_000)
+    data_source: str = Field(default="synthetic_form_summary", max_length=100)
+    constraints: dict = Field(default_factory=dict)
+
+
+class AgentRunRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    run_id: str
+    status: str
+    input_payload: dict
+    output_payload: dict | None
+    error_code: str | None
+    error_message: str | None
+    agent_provider: str
+    agent_model: str
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime

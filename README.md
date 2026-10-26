@@ -79,4 +79,18 @@ cd backend
 
 在 `/docs` 的 **Authorize** 填入 `.env` 的 `PLATFORM_API_KEY`，才能操作業務 API。
 
+### Agent 整合測試
+
+第一版的 `POST /agent/runs` 會執行一個不需模型 API key 的 LangGraph 測試流程：讀取固定的表單摘要、依最高偏好產生行銷建議，並將完整輸入、輸出、狀態與錯誤寫入 Neon 的 `agent_runs`。可在 `/docs` 使用下列內容測試：
+
+```json
+{
+  "goal": "提高工作坊報名人數",
+  "context": "學生社團的新手創客工作坊",
+  "constraints": {"channel": "instagram"}
+}
+```
+
+這個端點只產生測試建議，不會呼叫 Gemini、OpenAI、Claude、Google Sheets 或 Instagram，也不會發布內容。`AGENT_PROVIDER=local` 與 `AGENT_MODEL=deterministic-langgraph` 是目前唯一支援的後端設定；真正模型 API key 將只交給後續的背景 worker，不應放進前端或 API 回應。
+
 啟動 API 不會自動建表，也不會執行 seed；必須先跑 migration。`seed` 只建立虛構資料，不會發文或執行 Agent。

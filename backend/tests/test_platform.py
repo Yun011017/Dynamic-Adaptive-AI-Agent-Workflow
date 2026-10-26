@@ -26,7 +26,7 @@ settings.platform_workspace_slug = "development"
 
 from app.db import engine, SessionLocal
 from app.main import app
-from app.models import Workspace, Goal, Strategy, Execution, ExternalEvent, Observation, Member
+from app.models import AgentRun, Workspace, Goal, Strategy, Execution, ExternalEvent, Observation, Member
 from app.retry import read_with_retry
 
 
@@ -141,7 +141,29 @@ class PlatformTests(unittest.TestCase):
     def test_09_repeated_migrate(self):
         command.upgrade(self.config,"head")
         with engine.connect() as c:
-            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0002")
+            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0003")
+
+    def test_10_agent_run_is_saved_and_scoped(self):
+        response = self.client.post(
+            "/agent/runs",
+            headers=self.headers,
+            json={
+                "goal": "Improve workshop registrations",
+                "context": "Student club event",
+                "constraints": {"channel": "instagram"},
+            },
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        run = response.json()
+        self.assertEqual(run["status"], "COMPLETED")
+        self.assertEqual(run["agent_provider"], "local")
+        self.assertEqual(run["output_payload"]["data_source"], "synthetic_form_summary")
+        self.assertEqual(
+            self.client.get(f"/agent/runs/{run['run_id']}", headers=self.headers).status_code,
+            200,
+        )
+        with SessionLocal() as db:
+            self.assertEqual(db.query(AgentRun).filter_by(run_id=run["run_id"]).one().status, "COMPLETED")
 
 
 if __name__ == "__main__":

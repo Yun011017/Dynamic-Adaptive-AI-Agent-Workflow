@@ -63,6 +63,25 @@ class Execution(TenantRow, Base):
     )
 
 
+class AgentRun(TenantRow, Base):
+    __tablename__ = "agent_runs"
+    run_id: Mapped[str] = mapped_column(String(36), index=True)
+    status: Mapped[str] = mapped_column(String(16), server_default="PENDING")
+    input_payload: Mapped[dict] = mapped_column(JSON, server_default="{}")
+    output_payload: Mapped[dict | None] = mapped_column(JSON)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    agent_provider: Mapped[str] = mapped_column(String(32), server_default="local")
+    agent_model: Mapped[str] = mapped_column(String(128), server_default="deterministic-langgraph")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint("run_id"),
+        UniqueConstraint("workspace_id", "id"),
+        CheckConstraint("status IN ('PENDING','RUNNING','COMPLETED','FAILED')", name="ck_agent_runs_status"),
+    )
+
+
 class ExecutionAction(TenantRow, Base):
     __tablename__ = "execution_actions"
     execution_id: Mapped[int] = mapped_column(BigInteger)

@@ -1,5 +1,6 @@
 import hmac
 import uuid
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -11,9 +12,10 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import engine, get_db
-from .models import Execution, Goal, Strategy, Workspace
+from .agent_runner import run_agent
+from .models import AgentRun, Execution, Goal, Strategy, Workspace
 from .retry import read_with_retry
-from .schemas import ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead
+from .schemas import AgentRunCreate, AgentRunRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead
 
 app = FastAPI(title="Dynamic Adaptive AI Agent Workflow", version="0.2.0")
 bearer = HTTPBearer(auto_error=False)
@@ -124,3 +126,49 @@ def create_execution_record(strategy_id: int, db: DB, tenant: Tenant):
 @app.get("/executions/{execution_id}", response_model=ExecutionRead)
 def get_execution(execution_id: int, db: DB, tenant: Tenant):
     return scoped(db, Execution, execution_id, tenant)
+
+
+@app.post("/agent/runs", response_model=AgentRunRead, status_code=201)
+def create_agent_run(data: AgentRunCreate, db: DB, tenant: Tenant):
+    """Run the bounded development graph and persist the full run record."""
+    input_payload = data.model_dump()
+    row = AgentRun(
+        workspace_id=tenant,
+        run_id=str(uuid.uuid4()),
+        status="RUNNING",
+        input_payload=input_payload,
+        agent_provider=settings.agent_provider,
+        agent_model=settings.agent_model,
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    try:
+        row.output_payload = run_agent(
+            goal=data.goal, context=data.context, constraints=data.constraints
+        )
+        row.status = "COMPLETED"
+    except Exception:
+        row.status = "FAILED"
+        row.error_code = "AGENT_RUN_FAILED"
+        row.error_message = "Agent run could not be completed"
+    row.finished_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.get("/agent/runs/{run_id}", response_model=AgentRunRead)
+def get_agent_run(run_id: str, db: DB, tenant: Tenant):
+    row = read_with_retry(
+        lambda: db.scalar(
+            select(AgentRun).where(
+                AgentRun.run_id == run_id, AgentRun.workspace_id == tenant
+            )
+        ),
+        reset=db.rollback,
+    )
+    if row is None:
+        raise HTTPException(404, "Agent run not found")
+    return row
