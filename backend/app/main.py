@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -16,6 +17,16 @@ from .retry import read_with_retry
 from .schemas import AgentRunCreate, AgentRunRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead
 
 app = FastAPI(title="Dynamic Adaptive AI Agent Workflow", version="0.2.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[origin.strip() for origin in settings.frontend_origins.split(",") if origin.strip()],
+    # Next.js may select a different local port when 3000 is already occupied.
+    # Production origins remain explicitly controlled by FRONTEND_ORIGINS.
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 bearer = HTTPBearer(auto_error=False)
 DB = Annotated[Session, Depends(get_db)]
 
@@ -142,6 +153,21 @@ def create_agent_run(data: AgentRunCreate, db: DB, tenant: Tenant):
     db.commit()
     db.refresh(row)
     return row
+
+
+@app.get("/agent/runs", response_model=list[AgentRunRead])
+def list_agent_runs(db: DB, tenant: Tenant, limit: int = 50):
+    if not 1 <= limit <= 100:
+        raise HTTPException(422, "Invalid limit")
+    return read_with_retry(
+        lambda: db.scalars(
+            select(AgentRun)
+            .where(AgentRun.workspace_id == tenant)
+            .order_by(AgentRun.created_at.desc())
+            .limit(limit)
+        ).all(),
+        reset=db.rollback,
+    )
 
 
 @app.get("/agent/runs/{run_id}", response_model=AgentRunRead)

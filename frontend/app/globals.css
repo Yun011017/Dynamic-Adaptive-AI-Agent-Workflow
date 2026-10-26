@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-fira-sans: "Noto Sans TC", "Segoe UI", system-ui, sans-serif;
+  --font-fira-code: "Cascadia Code", Consolas, monospace;
+  color: #2f2e2a;
+  background: #f7f6f2;
+}
+* { box-sizing: border-box; }
+body { min-height: 100vh; margin: 0; background: radial-gradient(circle at 78% 5%, #e7eef7 0, transparent 26rem), #f7f6f2; }
+button, input, textarea, select { font: inherit; }
+.input { width: 100%; border: 1px solid #d8d5cd; border-radius: .75rem; background: #fffdf8; color: #2f2e2a; padding: .7rem .8rem; }
+.input:focus { border-color: #2f5e9e; outline: 0; box-shadow: 0 0 0 3px #cbd9eb; }
+:focus-visible { outline: 3px solid #cbd9eb; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }

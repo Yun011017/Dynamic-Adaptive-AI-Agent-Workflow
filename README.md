@@ -5,7 +5,7 @@
 ## 目錄
 
 ```text
-frontend/                      使用者介面，目前只有說明
+frontend/                      Next.js、React、Tailwind 使用者介面
 backend/
   app/                         FastAPI、ORM、連線、基本 API
   meta_api_test/               Meta OAuth / Instagram API 獨立測試沙盒
@@ -78,5 +78,37 @@ cd backend
 ```
 
 在 `/docs` 的 **Authorize** 填入 `.env` 的 `PLATFORM_API_KEY`，才能操作業務 API。
+
+### 前端操作介面
+
+前端可建立 Agent 工作、查看背景 worker 的執行狀態與讀取完成結果。請開啟第二個 CMD 視窗，第一次先安裝前端套件：
+
+```bat
+cd frontend
+if not exist .env copy .env.example .env
+npm install
+npm run dev
+```
+
+之後只需執行：
+
+```bat
+cd frontend
+npm run dev
+```
+
+開啟 [http://localhost:3000](http://localhost:3000)，按右上角「連線設定」，填入：
+
+- FastAPI URL：`http://127.0.0.1:8000`
+- Development API key：`backend/.env` 的 `PLATFORM_API_KEY`
+
+若要讓工作實際由 Agent 處理，另開第三個 CMD 視窗：
+
+```bat
+cd backend
+..\.venv\Scripts\python.exe -m app.agent_worker
+```
+
+前端只會呼叫 FastAPI，不會直接連 Neon。開發用 API key 只存於目前瀏覽器分頁，關閉分頁後即清除。
 
 各模組的專用設定、驗證紀錄與下一位接手事項，請閱讀 [`docs/handoffs/`](docs/handoffs/)；新增交接文件時不要覆蓋既有內容。

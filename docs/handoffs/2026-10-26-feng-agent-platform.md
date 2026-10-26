@@ -21,10 +21,10 @@ API 端點需在 `/docs` 的 Authorize 填入 `backend/.env` 的 `PLATFORM_API_K
 
 ## 環境設定
 
-- `AGENT_PROVIDER=local`
-- `AGENT_MODEL=deterministic-langgraph`
+- 預設可使用 `AGENT_PROVIDER=local` 與 `AGENT_MODEL=deterministic-langgraph`，不呼叫外部模型。
+- **目前本機的 `backend/.env` 已使用 Gemini provider 並完成真實模型驗證。**
 
-此階段不讀取模型 API key。`agent_lab/` 的 Gemini、OpenAI、Claude key 仍只透過其終端機提示輸入，不能提交 Git。
+`backend/.env` 不進 Git。已取得團隊共用 Gemini key 的成員，可直接在自己的 `backend/.env` 設定 Gemini provider 後使用；不需要再透過 `agent_lab/` 手動輸入。雲端 worker 則由管理者在 Secret／Environment Variables 設定同一把 key。任何 key 都不能提交 Git、貼到前端或寫進交接文件。
 
 ## 背景 Worker 與模型整合
 
@@ -51,9 +51,65 @@ GOOGLE_API_KEY=你的 key
 
 修改 `.env` 後，要重啟 worker。OpenAI 與 Claude 依序使用 `openai`／`OPENAI_API_KEY`、`claude`／`ANTHROPIC_API_KEY`。模型 key 不應進 Git、API request、資料庫 payload、log 或前端。
 
-## 雲端部署
+## 本機啟動方案
 
-根目錄 `render.yaml` 定義 Render Background Worker。於 Render 建立 Blueprint 後，填入 Neon 的 `DATABASE_URL`，再依 `AGENT_PROVIDER` 填入唯一一把對應模型 API key。Vercel 僅部署 FastAPI API，不能執行常駐 worker。
+第一次使用時，依根目錄 README 建立 `.venv`、安裝 `backend/requirements-dev.txt`，設定 `backend/.env`，並完成 migration：
+
+```bat
+cd backend
+..\.venv\Scripts\python.exe -m scripts.manage migrate
+..\.venv\Scripts\python.exe -m scripts.manage seed
+..\.venv\Scripts\python.exe -m scripts.manage check
+```
+
+日常整合測試需要三個 CMD 視窗：
+
+1. FastAPI：
+
+```bat
+cd backend
+..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+2. Worker：
+
+```bat
+cd backend
+..\.venv\Scripts\python.exe -m app.agent_worker
+```
+
+3. Next.js 前端（第一次需先執行 `npm install`）：
+
+```bat
+cd frontend
+if not exist .env copy .env.example .env
+if not exist node_modules npm install
+npm run dev
+```
+
+前端開啟 `http://localhost:3000`。開發時在「連線設定」填入 `http://127.0.0.1:8000` 與 `backend/.env` 的 `PLATFORM_API_KEY`。此 key 僅存在目前瀏覽器分頁；正式版應改為登入 session，不可自動傳給前端。
+
+`FRONTEND_ORIGINS` 預設允許 `localhost`／`127.0.0.1` 的本機開發埠。若前端顯示「無法連線後端」，先在瀏覽器開啟 `http://127.0.0.1:8000/health`；顯示 `{"status":"ok","database":"connected"}` 後，再重新整理前端。worker 閒置時沒有輸出是正常現象，它只會在 Neon 出現 `PENDING` 工作時開始處理。
+
+## 測試紀錄
+
+- Neon migration 已套用至 `0004`；`scripts.manage check` 已驗證核心表與 seed chain。
+- Gemini 背景 worker 已完成一次真實模型測試：工作從 `PENDING` 到 `COMPLETED`，輸出與 checkpoint 均已寫入 Neon。
+- 前端已改為 React、Next.js App Router、Tailwind CSS；`npm run build` 已成功通過 production build。
+- 前端手動驗證流程：設定連線 → 建立 Agent 工作 → 確認 `PENDING → RUNNING → COMPLETED`，並在「工作詳情」看到模型輸出。送出後新增工作表單會收起；選「建立下一筆工作」才會重新展開。
+- 新增 `GET /agent/runs`，前端的「工作歷史紀錄」會直接讀取同一 workspace 已保存於 Neon 的工作，不限於目前頁面建立的項目。
+
+整合測試需要能解析 Neon 網域的網路環境；若 `unittest` 出現 `getaddrinfo failed`，先確認本機網路／DNS，不要把它判定為 migration 或程式邏輯錯誤。
+
+### 前端可直接使用的測試資料
+
+在 `http://localhost:3000` 完成連線設定後，使用以下內容建立工作：
+
+- 活動目標：`提高 3D 列印入門工作坊的報名完成率`
+- 活動背景：`活動提供零基礎學生體驗建模與 3D 列印，報名頁已有訪客但完成填表比例偏低，希望用清楚的作品成果與流程說明降低參加門檻。`
+- 建議渠道：`Google Forms`
+
+送出後，右側應先出現工作卡，狀態依序為 `PENDING → RUNNING → COMPLETED`。選取該工作後，在「工作詳情」確認模型、run ID、完成時間與建議內容皆有顯示。若停在 `PENDING`，確認 worker CMD 視窗仍在執行；若顯示 `FAILED`，查看下方錯誤訊息與 worker 終端機輸出。
 
 ## 已知限制與下一步
 

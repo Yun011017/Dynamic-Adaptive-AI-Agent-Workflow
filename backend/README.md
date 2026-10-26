@@ -1,10 +1,10 @@
-# 後端、資料庫與部署流程
+# 後端
 
-## 現況
+FastAPI、Neon migration 與 Agent worker 位於此目錄。後端設定只放 `backend/.env`，不要提交。
 
-FastAPI 使用 SQLAlchemy／psycopg 連接 Neon。Alembic 管理 schema；HTTP 啟動不再執行 DDL。八張核心表已在目前設定的 Neon 套用 migration，並有虛構 seed。
+---
 
-`PLATFORM_API_KEY` 僅是 development 單一 workspace API 閘門。完整 OIDC、Agent 服務身分、審核、Audit 及外部工具執行不在本次平台功能內；資料表的 members 不會自動把金鑰轉為正式登入帳號。
+以下為既有技術備註；日後新增內容請優先寫入 `docs/`，不要把此 README 擴充成完整規格書。
 
 ## Migration
 

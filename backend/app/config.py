@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     agent_model: str = "deterministic-langgraph"
     agent_worker_poll_seconds: int = Field(default=2, ge=1, le=60)
     agent_run_lease_seconds: int = Field(default=300, ge=30, le=3600)
+    frontend_origins: str = "http://127.0.0.1:3000,http://localhost:3000"
     google_api_key: SecretStr | None = None
     openai_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
