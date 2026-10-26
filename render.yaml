@@ -1,0 +1,28 @@
+services:
+  - type: worker
+    name: dynamic-adaptive-ai-agent-worker
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.agent_worker
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_POOL_MODE
+        value: queue
+      - key: DB_CONNECT_TIMEOUT
+        value: "10"
+      - key: AGENT_PROVIDER
+        value: local
+      - key: AGENT_MODEL
+        value: deterministic-langgraph
+      - key: AGENT_WORKER_POLL_SECONDS
+        value: "2"
+      - key: AGENT_RUN_LEASE_SECONDS
+        value: "300"
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false

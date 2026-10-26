@@ -32,6 +32,7 @@ API 端點需在 `/docs` 的 Authorize 填入 `backend/.env` 的 `PLATFORM_API_K
 - `backend/app/agent_worker.py` 使用 `FOR UPDATE SKIP LOCKED` 取得工作、標示 `RUNNING`、執行 LangGraph，最後寫回 `COMPLETED` 或 `FAILED`。
 - `agent_run_checkpoints` 保存 `RUNNING` 與結束狀態；超過 `AGENT_RUN_LEASE_SECONDS` 的 `RUNNING` 工作可由另一個 worker 接手。
 - 預設 `local` provider 不需 API key。Gemini、OpenAI、Claude 會由 worker 讀取自己的環境變數 key，並用與 `agent_lab` 相同的工具呼叫模式執行。
+- 已用 Gemini worker 完成一次無外部副作用的 verification run：工具呼叫、Neon checkpoint 與 `COMPLETED` 結果均已確認。
 
 在 CMD 啟動 worker：
 
@@ -39,6 +40,20 @@ API 端點需在 `/docs` 的 Authorize 填入 `backend/.env` 的 `PLATFORM_API_K
 cd backend
 ..\.venv\Scripts\python.exe -m app.agent_worker
 ```
+
+測試真實模型時，先在 `backend/.env` 選擇一個 provider、模型與對應 key：
+
+```text
+AGENT_PROVIDER=gemini
+AGENT_MODEL=gemini-3.5-flash-lite
+GOOGLE_API_KEY=你的 key
+```
+
+修改 `.env` 後，要重啟 worker。OpenAI 與 Claude 依序使用 `openai`／`OPENAI_API_KEY`、`claude`／`ANTHROPIC_API_KEY`。模型 key 不應進 Git、API request、資料庫 payload、log 或前端。
+
+## 雲端部署
+
+根目錄 `render.yaml` 定義 Render Background Worker。於 Render 建立 Blueprint 後，填入 Neon 的 `DATABASE_URL`，再依 `AGENT_PROVIDER` 填入唯一一把對應模型 API key。Vercel 僅部署 FastAPI API，不能執行常駐 worker。
 
 ## 已知限制與下一步
 

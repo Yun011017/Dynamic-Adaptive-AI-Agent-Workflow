@@ -79,35 +79,4 @@ cd backend
 
 在 `/docs` 的 **Authorize** 填入 `.env` 的 `PLATFORM_API_KEY`，才能操作業務 API。
 
-### Agent 整合測試
-
-`POST /agent/runs` 只建立待執行工作並立刻回傳 `run_id` 與 `PENDING` 狀態；它不會在 HTTP 請求中等待 Agent。背景 worker 會從 Neon 取出工作、執行 LangGraph，並把輸入、輸出、狀態與錯誤寫入 `agent_runs`。每次狀態轉換也會寫入 `agent_run_checkpoints`，讓逾時的 `RUNNING` 工作能由另一個 worker 接手。可在 `/docs` 使用下列內容建立工作：
-
-```json
-{
-  "goal": "提高工作坊報名人數",
-  "context": "學生社團的新手創客工作坊",
-  "constraints": {"channel": "instagram"}
-}
-```
-
-開啟另一個 CMD 視窗，在專案根目錄啟動 worker：
-
-```bat
-cd backend
-..\.venv\Scripts\python.exe -m app.agent_worker
-```
-
-只想處理一筆工作後結束時，加上 `--once`。Worker 使用 `FOR UPDATE SKIP LOCKED` 取得工作，可同時啟動多個 worker 而不會重複執行同一筆 run。
-
-預設 `AGENT_PROVIDER=local`，只產生測試建議，不會呼叫 Gemini、OpenAI、Claude、Google Sheets 或 Instagram，也不會發布內容。要測試真實模型時，僅在 worker 的 `backend/.env` 設定 provider、可用的 model 名稱與其對應 API key，例如：
-
-```text
-AGENT_PROVIDER=gemini
-AGENT_MODEL=gemini-3.5-flash-lite
-GOOGLE_API_KEY=AIza...
-```
-
-可改用 `openai`／`OPENAI_API_KEY` 或 `claude`／`ANTHROPIC_API_KEY`。模型 key 不會進入 API request、Neon payload、log 或前端；不要提交 `backend/.env`。等待人工審核的流程仍需由 Agent Core 提供可恢復的審核 graph，平台 worker 已保存可用的 run checkpoint。
-
-啟動 API 不會自動建表，也不會執行 seed；必須先跑 migration。`seed` 只建立虛構資料，不會發文或執行 Agent。
+各模組的專用設定、驗證紀錄與下一位接手事項，請閱讀 [`docs/handoffs/`](docs/handoffs/)；新增交接文件時不要覆蓋既有內容。
