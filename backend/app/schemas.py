@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 class GoalCreate(BaseModel):
@@ -39,7 +40,7 @@ class ExecutionRead(BaseModel):
 class AgentRunCreate(BaseModel):
     goal: str = Field(min_length=1, max_length=500)
     context: str = Field(default="", max_length=4_000)
-    data_source: str = Field(default="synthetic_form_summary", max_length=100)
+    data_source: Literal["neon_form_summary"] = "neon_form_summary"
     constraints: dict = Field(default_factory=dict)
 
 

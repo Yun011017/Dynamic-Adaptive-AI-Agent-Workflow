@@ -69,6 +69,7 @@ def process_one_run() -> str | None:
         checkpoint(db, row, "RUNNING", {"input": payload, "attempt": row.attempts})
         try:
             row.output_payload = run_agent(
+                workspace_id=row.workspace_id,
                 goal=payload["goal"],
                 context=payload.get("context", ""),
                 constraints=payload.get("constraints", {}),

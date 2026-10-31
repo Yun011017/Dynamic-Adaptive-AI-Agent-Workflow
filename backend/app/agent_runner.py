@@ -5,9 +5,11 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from .config import settings
+from .form_summary import get_form_summary
 
 
 class RunState(TypedDict):
+    workspace_id: int | None
     goal: str
     context: str
     constraints: dict
@@ -15,40 +17,29 @@ class RunState(TypedDict):
     recommendation: dict
 
 
-def get_form_summary() -> dict:
-    """Return a fixed, non-personal test summary shared with Agent Core."""
-    return {
-        "source": "synthetic_form_summary",
-        "response_count": 30,
-        "preferences": {"hands_on": 20, "project_sharing": 7, "club_intro": 3},
-    }
-
-
 def _read_summary(state: RunState) -> dict:
-    return {"form_summary": get_form_summary()}
+    return {"form_summary": get_form_summary(workspace_id=state.get("workspace_id"))}
 
 
 def _recommend(state: RunState) -> dict:
     summary = state["form_summary"]
-    preference, count = max(summary["preferences"].items(), key=lambda item: item[1])
-    labels = {
-        "hands_on": "動手實作",
-        "project_sharing": "專題分享",
-        "club_intro": "社團介紹",
-    }
-    audience = f"偏好{labels[preference]}的潛在參與者"
-    return {
-        "recommendation": {
-            "target_audience": audience,
-            "content_direction": f"以{labels[preference]}作為內容主軸，回應 {count} 位測試受眾的偏好。",
-            "reason": f"測試表單共有 {summary['response_count']} 份回覆，最高偏好是 {labels[preference]}。",
-            "expected_metrics": ["reach", "clicks", "registrations"],
-            "goal": state["goal"],
-            "context": state["context"],
-            "constraints": state["constraints"],
-            "data_source": summary["source"],
-        }
-    }
+    count = summary["response_count"]
+    stats = "；".join(
+        f"{name}：有效 {value['count']} 筆，平均 {value['mean']}，最小 {value['min']}，最大 {value['max']}"
+        for name, value in summary["numeric_fields"].items() if value["count"]
+    )
+    direction = (f"已讀取 Neon 的 {count} 筆表單回覆。{stats}。請先定義題目意義，再制定活動宣傳建議。"
+                 if count else "Neon 尚無此來源的表單回覆，請先執行表單同步。")
+    return {"recommendation": {
+        "target_audience": "目前資料不足以判斷受眾偏好",
+        "content_direction": direction,
+        "reason": f"依據 Neon 已匯入的 {count} 筆回覆；僅使用允許欄位的聚合數值。",
+        "expected_metrics": ["response_count"],
+        "goal": state["goal"], "context": state["context"], "constraints": state["constraints"],
+        "data_source": summary["source"], "form_summary": summary,
+        "summary_id": summary["summary_id"],
+        "evidence": {"response_count": count, "numeric_fields": summary["numeric_fields"]},
+    }}
 
 
 def build_graph():
@@ -61,9 +52,9 @@ def build_graph():
     return graph.compile()
 
 
-def _run_local(*, goal: str, context: str, constraints: dict) -> dict:
+def _run_local(*, goal: str, context: str, constraints: dict, workspace_id: int | None) -> dict:
     result = build_graph().invoke(
-        {"goal": goal, "context": context, "constraints": constraints}
+        {"goal": goal, "context": context, "constraints": constraints, "workspace_id": workspace_id}
     )
     return result["recommendation"]
 
@@ -112,17 +103,19 @@ def _text_content(content: object) -> str:
     return str(content)
 
 
-def _run_model(*, goal: str, context: str, constraints: dict, provider: str, model_name: str) -> dict:
+def _run_model(*, goal: str, context: str, constraints: dict, provider: str, model_name: str, workspace_id: int | None) -> dict:
     """Use the same tool-calling shape as agent_lab without terminal interaction."""
     from langchain_core.messages import HumanMessage, SystemMessage
     from langchain_core.tools import tool
     from langgraph.graph import MessagesState
     from langgraph.prebuilt import ToolNode
 
+    summary = get_form_summary(workspace_id=workspace_id)
+
     @tool
     def get_form_summary_tool() -> dict:
-        """取得 NTUMaker 測試活動的彙整報名資料，不含個人資料。"""
-        return get_form_summary()
+        """取得 Neon 已匯入表單的筆數與允許數值欄位統計，不含逐筆資料。"""
+        return summary
 
     tools = [get_form_summary_tool]
     model = _model_for(provider, model_name).bind_tools(tools)
@@ -132,7 +125,8 @@ def _run_model(*, goal: str, context: str, constraints: dict, provider: str, mod
             SystemMessage(
                 content=(
                     "你是行銷分析助理，必須先呼叫 get_form_summary_tool，"
-                    "再以繁體中文提出可追溯的行銷建議。"
+                    "再以繁體中文說明資料。只引用工具摘要，不編造數字。"
+                    "test、temp 尚無業務定義，不可猜成偏好。資料不足時明確說明。"
                 )
             ),
             *state["messages"],
@@ -159,23 +153,25 @@ def _run_model(*, goal: str, context: str, constraints: dict, provider: str, mod
     if not tool_called:
         raise RuntimeError("Agent completed without reading the required form-summary tool")
     return {
-        "target_audience": "由模型依測試表單判斷",
+        "target_audience": "目前欄位未定義受眾偏好",
         "content_direction": final_text,
-        "reason": "模型已先讀取測試表單摘要，再產生建議。",
-        "expected_metrics": ["reach", "clicks", "registrations"],
+        "reason": f"模型已讀取 Neon 的 {summary['response_count']} 筆回覆摘要。",
+        "expected_metrics": ["response_count"],
         "goal": goal,
         "context": context,
         "constraints": constraints,
-        "data_source": "synthetic_form_summary",
+        "data_source": summary["source"],
+        "form_summary": summary,
+        "summary_id": summary["summary_id"],
         "tool_called": True,
     }
 
 
-def run_agent(*, goal: str, context: str, constraints: dict, provider: str = "local", model_name: str = "deterministic-langgraph") -> dict:
+def run_agent(*, goal: str, context: str, constraints: dict, provider: str = "local", model_name: str = "deterministic-langgraph", workspace_id: int | None = None) -> dict:
     """Run a bounded Agent graph; model credentials stay in worker-only settings."""
     if provider == "local":
-        return _run_local(goal=goal, context=context, constraints=constraints)
+        return _run_local(goal=goal, context=context, constraints=constraints, workspace_id=workspace_id)
     return _run_model(
         goal=goal, context=context, constraints=constraints,
-        provider=provider, model_name=model_name,
+        provider=provider, model_name=model_name, workspace_id=workspace_id,
     )

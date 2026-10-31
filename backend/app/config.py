@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     google_api_key: SecretStr | None = None
     openai_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
+    google_forms_apps_script_url: str = ""
+    google_forms_source_id: str = "connection-test"
+    google_forms_agent_numeric_fields: str = "test,temp"
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parents[1] / ".env",

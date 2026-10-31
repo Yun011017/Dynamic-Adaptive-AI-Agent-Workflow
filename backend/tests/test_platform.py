@@ -162,7 +162,7 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual(process_one_run(), run["run_id"])
         run = self.client.get(f"/agent/runs/{run['run_id']}", headers=self.headers).json()
         self.assertEqual(run["status"], "COMPLETED")
-        self.assertEqual(run["output_payload"]["data_source"], "synthetic_form_summary")
+        self.assertEqual(run["output_payload"]["data_source"], "neon_form_summary")
         self.assertEqual(
             self.client.get(f"/agent/runs/{run['run_id']}", headers=self.headers).status_code,
             200,
@@ -171,6 +171,39 @@ class PlatformTests(unittest.TestCase):
             self.assertEqual(db.query(AgentRun).filter_by(run_id=run["run_id"]).one().status, "COMPLETED")
             phases = [checkpoint.phase for checkpoint in db.query(AgentRunCheckpoint).order_by(AgentRunCheckpoint.sequence).all()]
             self.assertEqual(phases, ["RUNNING", "COMPLETED"])
+
+
+    def test_11_form_ingestion_is_idempotent(self):
+        from app.form_sync import parse_responses, save_responses, PROVIDER
+        rows = parse_responses([['時間戳記', 'test', 'temp'], ['2026-10-31T00:00:00Z', 1, 2], ['2026-10-31T01:00:00Z', 3, 4]])
+        with SessionLocal.begin() as db:
+            first = save_responses(db, rows, workspace_slug='development', source_id='integration-form')
+        with SessionLocal.begin() as db:
+            second = save_responses(db, rows[::-1], workspace_slug='development', source_id='integration-form')
+        self.assertEqual(first, dict(read=2, inserted=2, skipped=0))
+        self.assertEqual(second, dict(read=2, inserted=0, skipped=2))
+        with SessionLocal() as db:
+            self.assertEqual(db.query(ExternalEvent).filter_by(provider=PROVIDER, source_account='integration-form').count(), 2)
+
+    def test_12_form_summary_is_scoped_and_used_by_agent(self):
+        from app.form_summary import get_form_summary
+        from app.form_sync import parse_responses, save_responses
+        from app.agent_runner import run_agent
+        rows = parse_responses([['test', 'temp', 'Email'], [1, 2, 'private@example.test'], [3, 4, 'other@example.test']])
+        with SessionLocal.begin() as db:
+            save_responses(db, rows, workspace_slug='development', source_id='summary-integration')
+            save_responses(db, rows, workspace_slug='development', source_id='other-form')
+            other = Workspace(slug='summary-empty', name='Other workspace')
+            db.add(other)
+            db.flush()
+            other_id = other.id
+        with patch.object(settings, 'google_forms_source_id', 'summary-integration'), patch.object(settings, 'google_forms_agent_numeric_fields', 'test,temp'):
+            summary = get_form_summary()
+            self.assertEqual(summary['response_count'], 2)
+            self.assertEqual(summary['numeric_fields']['test']['mean'], 2)
+            self.assertNotIn('Email', str(summary))
+            self.assertEqual(get_form_summary(workspace_id=other_id)['response_count'], 0)
+            self.assertEqual(run_agent(goal='test', context='', constraints={})['form_summary'], summary)
 
 
 if __name__ == "__main__":
