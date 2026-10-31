@@ -84,7 +84,8 @@ def save_responses(db, responses, *, workspace_slug, source_id):
     """Caller commits the whole batch. ON CONFLICT also protects concurrent imports."""
     if not source_id.strip() or len(source_id) > 255:
         raise FormSyncError('Form source ID must be nonempty and at most 255 characters')
-    from .models import ExternalEvent, Workspace
+    from .models import ExternalEvent, Workspace, FormResponse
+    from .form_fields import normalize_fields
 
     workspace_id = db.scalar(select(Workspace.id).where(Workspace.slug == workspace_slug, Workspace.status == 'active'))
     if workspace_id is None:
@@ -98,7 +99,19 @@ def save_responses(db, responses, *, workspace_slug, source_id):
             event_type='form_response', processing_status='RECEIVED',
             raw_payload={'answers': answers, 'fetched_at': fetched_at},
         ).on_conflict_do_nothing(constraint='uq_external_event_source').returning(ExternalEvent.id)
-        inserted += db.scalar(statement) is not None
+        event_id = db.scalar(statement)
+        inserted += event_id is not None
+        if event_id is None:
+            event_id = db.scalar(select(ExternalEvent.id).where(
+                ExternalEvent.workspace_id == workspace_id, ExternalEvent.provider == PROVIDER,
+                ExternalEvent.source_account == source_id, ExternalEvent.source_object_id == digest,
+                ExternalEvent.source_version == 'content-sha256-v1'))
+        if event_id is None:
+            raise FormSyncError('Cannot resolve stored form response')
+        fields = normalize_fields(answers)
+        db.execute(insert(FormResponse).values(
+            workspace_id=workspace_id, external_event_id=event_id, source_id=source_id, **fields,
+        ).on_conflict_do_update(constraint='uq_form_response_event', set_=fields))
     return {'read': len(responses), 'inserted': inserted, 'skipped': len(responses) - inserted}
 
 

@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Integer, JSON, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, ForeignKeyConstraint, Integer, JSON, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
@@ -134,6 +134,21 @@ class ExternalEvent(TenantRow, Base):
     __table_args__ = (
         UniqueConstraint("workspace_id", "provider", "source_account", "source_object_id", "source_version", name="uq_external_event_source"),
         UniqueConstraint("workspace_id", "id"), CheckConstraint("attempts >= 0", name="ck_event_attempts"),
+    )
+
+
+class FormResponse(TenantRow, Base):
+    __tablename__ = "form_responses"
+    external_event_id: Mapped[int] = mapped_column(BigInteger)
+    source_id: Mapped[str] = mapped_column(String(255))
+    is_member: Mapped[bool | None] = mapped_column(Boolean)
+    will_attend: Mapped[bool | None] = mapped_column(Boolean)
+    event_date: Mapped[date | None] = mapped_column(Date)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    normalization_errors: Mapped[list] = mapped_column(JSON, server_default="[]")
+    __table_args__ = (
+        ForeignKeyConstraint(["workspace_id", "external_event_id"], ["external_events.workspace_id", "external_events.id"]),
+        UniqueConstraint("workspace_id", "external_event_id", name="uq_form_response_event"),
     )
 
 

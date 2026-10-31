@@ -35,32 +35,81 @@ GOOGLE_FORMS_SOURCE_ID=connection-test
 
 `tests.test_platform` 另含真實 PostgreSQL 的兩次匯入去重測試，僅在隔離測試資料庫執行。
 
-## Agent 讀取已匯入表單
+## 結構化表單回覆欄位
 
-`app.agent_runner.get_form_summary()` 現在從 Neon `external_events` 查詢，沒有固定 30 人的假摘要，也不會在查詢失敗時回退成假資料。worker 傳入工作所屬 workspace_id，查詢再限制 provider、GOOGLE_FORMS_SOURCE_ID、form_response 與匯入版本。直接本機呼叫時使用 PLATFORM_WORKSPACE_SLUG 對應的 active workspace。
+Migration `0005` 新增 `form_responses`，原始答案仍保存在 external_events，兩者以同 workspace 的 external_event_id 關聯：
 
-新增可選設定：
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| is_member | nullable boolean | 是否為社員；是／否／未知 NULL 分開。 |
+| will_attend | nullable boolean | 是否參加；缺少題目或未知答案不推定為否。 |
+| event_date | nullable date | 活動日期，與填表時間分開。 |
+| submitted_at | nullable timestamptz | 填表時間，統一 UTC。 |
+| normalization_errors | JSON array | 無效答案／日期的欄位錯誤代碼，不包含原始答案。 |
+
+另有 id、workspace_id、external_event_id、source_id、created_at。每個來源事件只能有一筆結構化回覆，跨 workspace 外鍵受 DB 約束。同步重跑會更新欄位對照結果，不新增重複回覆；既有事件在重新同步後補入新表。
+
+題目名稱可在 backend/.env 設定，預設如下：
 
 ```dotenv
-GOOGLE_FORMS_AGENT_NUMERIC_FIELDS=test,temp
+GOOGLE_FORMS_MEMBER_COLUMN=是否是社員
+GOOGLE_FORMS_ATTENDANCE_COLUMN=是否要參加
+GOOGLE_FORMS_EVENT_DATE_COLUMN=活動日期
+GOOGLE_FORMS_SUBMITTED_AT_COLUMN=時間戳記
+GOOGLE_FORMS_DATE_UTC_OFFSET_HOURS=8
 ```
 
-僅這份逗號分隔白名單的數值欄位會提供 count、missing_or_invalid、min、max、mean；不把布林、數字字串或非有限數值強制轉成數字。回覆總數不因欄位缺值而減少。Agent 不會收到逐筆答案、來源網址、Email、時間戳或其他未列入白名單的欄位。空白白名單代表只提供回覆總數。
+「是／否」、社員與參加的明確文字選項及布林值會轉成 boolean，不猜測數字代碼或「尚未決定」。未知值存 NULL 並記錄錯誤碼；缺少題目則存 NULL。日期接受 YYYY-MM-DD／YYYY/MM/DD；Apps Script 的含時區 ISO 日期轉為設定 UTC offset 的當地日期，預設台灣 +8，避免午夜被轉成前一天。填表時間必須含時區，無法解析則存 NULL 並留錯誤碼。
 
-先執行表單同步，再執行 Agent；Agent 只讀資料庫，不直接重新抓 Apps Script。需要更新資料時重新執行 form_worker。以本機 local 模式唯讀測試，不寫入工作歷史也不呼叫模型：
+先 migration 再同步（在 backend 目錄）：
 
 ```powershell
-..\.venv\Scripts\python.exe -c "import json; from app.agent_runner import run_agent; print(json.dumps(run_agent(goal='分析已匯入表單', context='', constraints={}), ensure_ascii=False, indent=2))"
+..\.venv\Scripts\python.exe -m scripts.manage migrate
+..\.venv\Scripts\python.exe -m app.form_worker
 ```
 
-前端建立新工作也會使用相同 Neon 摘要；請重啟 API 與 agent_worker。新工作 data_source 預設且僅接受 neon_form_summary，前端省略此欄即可。歷史完成工作仍保留原輸出；舊等待工作若保存了原 synthetic 標籤，新 worker 執行時仍改讀 Neon，不再使用假資料。
+目前資料源仍是原本兩筆 test/temp；不會因新增欄位而捏造社員或參加答案。使用者提供的「工作坊3－物聯網專題」只作格式參考，沒有更換來源：題目是姓名、是否是社員；沒有參加題，日期在活動說明中且為兩場，不自動推成每筆回覆日期或參加意願。姓名仍只保存在 raw_payload.answers，沒有新增姓名欄或傳給 Agent。
 
-輸出保留 form_summary 與 summary_id（聚合內容 SHA-256）以追溯當次讀取的資料。local 模式直接根據統計回報結果，模型模式必須呼叫摘要工具；模型文字的數字正確性目前仍需額外驗證，不能由工具已呼叫推定整段文字完全正確。當前 test/temp 未定義業務意義，不將其解釋為活動偏好，亦不宣稱已有足夠資料推論受眾。
+Agent 現在改從 form_responses 讀取結構化統計，詳細說明如下。
+
+```powershell
+..\.venv\Scripts\python.exe -m unittest tests.test_agent_runner tests.test_form_sync tests.test_form_fields -v
+```
+
+## Agent 讀取已匯入表單
+
+`get_form_summary()` 定義於 app/form_summary.py，由 app/agent_runner.py 匯入。現在直接讀取 form_responses 的結構化欄位，不選取 external_events.raw_payload；僅 join 外部事件的來源 metadata，確保符合 provider、來源 ID 與匯入版本。worker 傳入工作 workspace_id；直接本機呼叫使用 PLATFORM_WORKSPACE_SLUG 的 active workspace。
+
+只提供聚合結果：
+
+| 摘要欄位 | 說明 |
+| --- | --- |
+| storage_table | form_responses |
+| response_count | 已同步結構化回覆總筆數 |
+| membership | 社員 yes／非社員 no／未知 unknown 筆數 |
+| attendance | 願意參加 yes／不參加 no／未知 unknown 筆數 |
+| event_dates | 每個活動日期的回覆筆數（ISO 日期） |
+| event_date_unknown_count | 缺少活動日期的筆數 |
+| submission_period | 填表時間已知／未知筆數及最早／最晚 UTC 時間 |
+| normalization_error_count | 含正規化錯誤的回覆筆數，不包含錯誤原文 |
+| summary_id | 當次摘要 SHA-256 |
+
+不傳姓名、Email、原始答案、逐筆紀錄或來源 URL。未知不視為否，參加意願不等於實際到場，也不能解釋為內容偏好。舊 GOOGLE_FORMS_AGENT_NUMERIC_FIELDS 設定已不再使用，test/temp 不再進入摘要。
+
+先執行 scripts.manage migrate 至 0005，再執行 app.form_worker 更新結構化資料；Agent 不會自行讀 Apps Script，也不會在 form_responses 無資料時回退原始資料或假摘要。已存在的 raw events 需重新同步補齊結構化列。空來源正常回報 0；查詢錯誤使工作失敗。
+
+在 backend 目錄直接唯讀測試 local Agent，不建立工作紀錄也不呼叫外部模型：
+
+```powershell
+..\.venv\Scripts\python.exe -c "import json; from app.agent_runner import run_agent; print(json.dumps(run_agent(goal='分析表單社員與參加意願', context='', constraints={}), ensure_ascii=False, indent=2))"
+```
+
+前端建立新工作也使用相同摘要，重啟 API 與 Agent worker 即可。API data_source 仍為 neon_form_summary，前端不用更改；已完成工作保留舊結果，不回寫。輸出保存 form_summary／summary_id，local evidence 也保存社員、參加與日期依據。模型模式確認摘要工具被呼叫，但自然語言數字仍未逐一核對。
 
 離線測試（不連 Neon）：
 
 ```powershell
-..\.venv\Scripts\python.exe -m unittest tests.test_agent_runner tests.test_form_sync -v
+..\.venv\Scripts\python.exe -m unittest tests.test_agent_runner tests.test_form_sync tests.test_form_fields -v
 ```
 
 ---

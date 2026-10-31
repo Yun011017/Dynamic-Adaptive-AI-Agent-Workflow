@@ -142,7 +142,7 @@ class PlatformTests(unittest.TestCase):
     def test_09_repeated_migrate(self):
         command.upgrade(self.config,"head")
         with engine.connect() as c:
-            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0004")
+            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0005")
 
     def test_10_agent_run_is_saved_and_scoped(self):
         response = self.client.post(
@@ -197,13 +197,46 @@ class PlatformTests(unittest.TestCase):
             db.add(other)
             db.flush()
             other_id = other.id
-        with patch.object(settings, 'google_forms_source_id', 'summary-integration'), patch.object(settings, 'google_forms_agent_numeric_fields', 'test,temp'):
+        with patch.object(settings, 'google_forms_source_id', 'summary-integration'):
             summary = get_form_summary()
             self.assertEqual(summary['response_count'], 2)
-            self.assertEqual(summary['numeric_fields']['test']['mean'], 2)
+            self.assertEqual(summary['storage_table'], 'form_responses')
+            self.assertEqual(summary['membership'], dict(yes=0, no=0, unknown=2))
             self.assertNotIn('Email', str(summary))
             self.assertEqual(get_form_summary(workspace_id=other_id)['response_count'], 0)
             self.assertEqual(run_agent(goal='test', context='', constraints={})['form_summary'], summary)
+
+
+    def test_13_structured_fields_are_saved_and_remapped(self):
+        from app.form_sync import parse_responses, save_responses
+        from app.models import FormResponse
+        from datetime import date
+        rows = parse_responses([['是否是社員', '是否要參加', '活動日期', '時間戳記'],
+                                ['是', '不參加', '2026-11-15', '2026-10-31T00:00:00Z']])
+        with SessionLocal.begin() as db:
+            first = save_responses(db, rows, workspace_slug='development', source_id='structured-test')
+        with SessionLocal.begin() as db:
+            second = save_responses(db, rows, workspace_slug='development', source_id='structured-test')
+        self.assertEqual(first['inserted'], 1)
+        self.assertEqual(second['inserted'], 0)
+        with SessionLocal() as db:
+            result = db.query(FormResponse).filter_by(source_id='structured-test').one()
+            self.assertTrue(result.is_member)
+            self.assertFalse(result.will_attend)
+            self.assertEqual(result.event_date, date(2026, 11, 15))
+            self.assertIsNotNone(result.submitted_at)
+        from app.form_summary import get_form_summary
+        with patch.object(settings, 'google_forms_source_id', 'structured-test'):
+            summary = get_form_summary()
+            self.assertEqual(summary['membership']['yes'], 1)
+            self.assertEqual(summary['attendance']['no'], 1)
+            self.assertEqual(summary['event_dates'], {'2026-11-15': 1})
+        # A remapping of existing source data refreshes typed fields without duplicating raw events.
+        with patch.object(settings, 'google_forms_member_column', 'missing'):
+            with SessionLocal.begin() as db:
+                save_responses(db, rows, workspace_slug='development', source_id='structured-test')
+        with SessionLocal() as db:
+            self.assertIsNone(db.query(FormResponse).filter_by(source_id='structured-test').one().is_member)
 
 
 if __name__ == "__main__":

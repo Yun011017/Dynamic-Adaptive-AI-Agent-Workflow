@@ -9,15 +9,15 @@ Google Forms → 連動 Sheets → 既有 Apps Script doGet
   → app.form_worker（手動執行一次）
   → 格式驗證、內容雜湊、單一交易寫入 Neon external_events
   → app.agent_worker 領取 Agent 工作，傳入工作所屬 workspace_id
-  → get_form_summary() 從 Neon 讀取限定來源的統計
+  → get_form_summary() 從 Neon form_responses 讀取限定來源的結構化統計
   → local 規則／模型工具流程產生結果
   → agent_runs.output_payload 保存建議及摘要快照
   → 前端透過原有 API 查詢工作結果
 ```
 
-已完成：讀取目前測試表單、寫入資料庫、重跑去重、取代寫死的 30 人假摘要、工作空間與來源篩選、數值白名單統計、結果追溯及離線測試。
+已完成：讀取目前測試表單、寫入資料庫、重跑去重、取代寫死的 30 人假摘要、工作空間與來源篩選、社員／參加意願／日期統計、結果追溯及離線測試。
 
-沒有修改 Google 端 Apps Script、前端、資料表、migration、依賴或部署設定。兩個 worker 分開執行：form_worker 更新資料；agent_worker 處理 Agent 工作。Agent 不會自動抓取 Apps Script，也不會自動啟動同步 worker。
+新增 migration 0005 與 form_responses 結構化表單回覆表；沒有修改 Google 端 Apps Script、前端、依賴或部署設定。兩個 worker 分開執行：form_worker 更新資料；agent_worker 處理 Agent 工作。Agent 不會自動抓取 Apps Script，也不會自動啟動同步 worker。
 
 ## 2. 變更檔案
 
@@ -25,10 +25,15 @@ Google Forms → 連動 Sheets → 既有 Apps Script doGet
 | --- | --- |
 | `backend/app/form_sync.py`（新增） | 讀取 Apps Script、Google URL／重新導向限制、20 秒 timeout、2 MB 上限、表格驗證、SHA-256 與 PostgreSQL 去重寫入。 |
 | `backend/app/form_worker.py`（新增） | 一次性同步入口，僅輸出筆數，錯誤回傳非零 exit code 並遮罩敏感資訊。 |
+| `backend/app/form_fields.py`（新增） | 將社員、參加與日期題目明確映射為結構化欄位，未知值保留 NULL 與錯誤代碼。 |
+| `backend/app/models.py` | 新增 FormResponse ORM，含跨 workspace 外鍵與事件唯一鍵。 |
+| `backend/migrations/versions/0005_form_responses.py`（新增） | 非破壞性新增 form_responses 表，已套用 Neon。 |
+| `backend/scripts/manage.py` | check 納入新資料表。 |
+| `backend/tests/test_form_fields.py`（新增） | 布林、缺值、映射、日期與時區測試。 |
 | `backend/app/form_summary.py`（新增） | get_form_summary() 的定義位置，查詢 Neon，輸出允許欄位的聚合摘要與雜湊。 |
 | `backend/app/agent_runner.py` | 匯入共用摘要工具，取代固定假資料；local 依真實統計回報，模型透過 get_form_summary_tool() 取得摘要，保存 form_summary／summary_id。 |
 | `backend/app/agent_worker.py` | 將 row.workspace_id 傳給 run_agent，讓摘要使用工作所屬範圍。 |
-| `backend/app/config.py` | 新增表單端點、來源 ID、Agent 數值欄位設定。 |
+| `backend/app/config.py` | 新增表單端點、來源 ID、題目對照與日期時區設定；最終移除舊數值白名單設定。 |
 | `backend/app/schemas.py` | AgentRunCreate.data_source 預設且只接受 neon_form_summary。 |
 | `backend/.env.example` | 新增上述環境變數範本，不含實際網址或憑證。 |
 | `backend/tests/test_form_sync.py`（新增） | 同步資料驗證、雜湊穩定性、URL／來源 ID 與網路錯誤測試。 |
@@ -49,7 +54,6 @@ DATABASE_URL=你的Neon連線
 PLATFORM_WORKSPACE_SLUG=development
 GOOGLE_FORMS_APPS_SCRIPT_URL=你的AppsScript部署網址
 GOOGLE_FORMS_SOURCE_ID=connection-test
-GOOGLE_FORMS_AGENT_NUMERIC_FIELDS=test,temp
 AGENT_PROVIDER=local
 AGENT_MODEL=deterministic-langgraph
 ```
@@ -95,17 +99,15 @@ URL 限 Google HTTPS `/macros/s/.../exec`，重新導向僅 script.google.com／
 
 ## 5. Agent 查詢、白名單與結果
 
-get_form_summary() 定義於 app/form_summary.py，app/agent_runner.py 匯入；模型用的 get_form_summary_tool() 包裝位於 agent_runner.py。
+get_form_summary() 定義於 app/form_summary.py，app/agent_runner.py 匯入；模型用的 get_form_summary_tool() 包裝位於 agent_runner.py。最新版本從 form_responses 選取 is_member、will_attend、event_date、submitted_at、normalization_errors，不讀 raw_payload；僅 join external_events 以限制來源 metadata。
 
-查詢必須同時符合：active workspace、google_forms_apps_script provider、設定來源 ID、form_response 類型與 content-sha256-v1 版本。worker 以工作記錄傳 workspace_id；直接本機呼叫未傳時，使用 PLATFORM_WORKSPACE_SLUG 查找。模型不能自行指定 workspace、URL、SQL 或欄位。
+查詢同時限制 active workspace、google_forms_apps_script provider、設定來源 ID、form_response 類型與 content-sha256-v1 版本。worker 以工作記錄傳 workspace_id；本機直接呼叫使用 PLATFORM_WORKSPACE_SLUG。模型不能指定 workspace、URL、SQL 或任意欄位。
 
-只彙整 GOOGLE_FORMS_AGENT_NUMERIC_FIELDS 的欄位，預設 test,temp；逗號分隔，設空白則僅回報筆數。統計為 count、missing_or_invalid、min、max、mean。布林、數字字串及非有限值不轉成有效數字；缺值不會減少總回覆數。
+輸出白名單為 source=neon_form_summary、storage_table=form_responses、source_id、response_count、membership（yes/no/unknown）、attendance（yes/no/unknown）、event_dates（日期到筆數）、event_date_unknown_count、submission_period（已知／未知數及最早／最晚 UTC 時間）、normalization_error_count（有錯誤的回覆數）、notice、summary_id。不提供逐筆紀錄、姓名、Email、原始答案、錯誤原文或來源 URL。
 
-摘要包含 source=neon_form_summary、source_id、response_count、numeric_fields、notice 與 summary_id（聚合內容 SHA-256）。不向模型提供逐筆答案、原始時間、Email、其他未授權欄位或來源 URL。結果保留 form_summary／summary_id，local 模式另有統計 evidence。
+local 結果會引用社員、參加與日期統計，有明確參加意願才建議行前資訊等後續；未知不當成否，意願不當成實際到場或內容偏好。模型同樣取得此摘要，但尚未做自然語言數字逐一驗證。兩條路徑保存摘要快照與 SHA-256；local 另附統計 evidence。
 
-目前 test/temp 僅連線測試，沒有業務定義；local 回報描述統計，不將其猜為活動偏好。模型須先呼叫工具，但尚未實作自然語言數字逐一核對，工具已被呼叫不代表整段模型文字一定正確。
-
-不存在 workspace 或 DB 查詢錯誤直接失敗，不回退假摘要；有效 workspace 沒資料時回報 0 並提示先同步。新 API 工作只接受 neon_form_summary，前端原本省略來源欄位即可。舊等待工作即使保存 synthetic 標籤，新 worker 仍讀 Neon；已完成歷史不改寫。
+GOOGLE_FORMS_AGENT_NUMERIC_FIELDS 已移除，舊 .env 同名設定會被忽略，test/temp 不再被模型讀取。form_responses 無資料回報 0 並提示同步，不回退原始事件或假資料。不存在 workspace 或 DB 錯誤則直接失敗。API data_source 維持 neon_form_summary，前端不需改動；歷史完成工作不改寫。
 
 ## 6. 本機操作
 
@@ -148,15 +150,15 @@ get_form_summary() 定義於 app/form_summary.py，app/agent_runner.py 匯入；
 
 實際新增 2 筆，第二次不重複。這是使用者授權的資料匯入，不是在正式 Neon 跑測試套件。
 
-真實 Neon → local Agent 唯讀驗證：2 筆；test 有效 2 筆、min=1、max=2、mean=1.5；temp 有效 2 筆、min=4、max=6、mean=5。該次僅讀資料庫，沒有讀 Apps Script、寫資料庫或呼叫付費模型。
+第一階段歷史驗證（目前已改讀結構化欄位）：真實 Neon → local Agent 唯讀驗證曾取得 2 筆；test 有效 2 筆、min=1、max=2、mean=1.5；temp 有效 2 筆、min=4、max=6、mean=5。該次僅讀資料庫，沒有讀 Apps Script、寫資料庫或呼叫付費模型。最新 form_responses 驗證見第 11 節。
 
 最終離線測試：
 
 ```powershell
-..\.venv\Scripts\python.exe -m unittest tests.test_agent_runner tests.test_form_sync -v
+..\.venv\Scripts\python.exe -m unittest tests.test_agent_runner tests.test_form_sync tests.test_form_fields -v
 ```
 
-13 項通過，涵蓋內容雜湊、格式與空列、來源限制、網路錯誤遮罩、欄位白名單、無效數值、資料改變影響結果、空資料、DB 失敗不回退、模型工具傳遞及 API 來源。另通過 compileall、git diff --check。
+20 項通過，涵蓋內容雜湊、格式與空列、來源限制、網路錯誤遮罩、欄位白名單、無效數值、資料改變影響結果、空資料、DB 失敗不回退、模型工具傳遞、未知／否區分、日期彙整及 API 來源。另通過 compileall、git diff --check。
 
 未執行：新增的 tests.test_platform PostgreSQL 整合套件、此次真實模型呼叫、前端到 worker 完整驗收、雲端部署驗收。資料庫整合測試僅在隔離 PostgreSQL 執行，不使用正式 Neon。
 
@@ -173,3 +175,47 @@ get_form_summary() 定義於 app/form_summary.py，app/agent_runner.py 匯入；
 ## 9. 版本與交付
 
 修改前 HEAD 為 c6570d4（Update Worker Deployment Documentation）。本文件與功能以同一筆「feat: 串接表單同步至 Neon 並讓 Agent 讀取真實摘要」提交至 dengdee；實際 commit hash 以 Git 紀錄為準。遠端原先被捨棄的表單版本以 force-with-lease 更新為本次重做版本，不修改 main。設定檔中的實際端點、DB URL 與模型／平台 key 不包含在本文件。
+
+
+## 10. 結構化欄位補充（同日後續修改）
+
+依使用者要求新增資料庫欄位記錄社員、參加與日期，與本次交接合併，不另建交接文件。
+
+### 新增資料表
+
+Neon 已套用 0005，新增 form_responses：id、workspace_id、external_event_id、source_id、is_member（nullable boolean）、will_attend（nullable boolean）、event_date（nullable date）、submitted_at（nullable timestamptz）、normalization_errors（JSON array）、created_at。同 workspace／external_event_id 唯一，複合外鍵指向 external_events 防止跨 workspace 關聯。原始答案保留，不刪除既有資料。
+
+新增 app/form_fields.py，form_sync.save_responses() 在同一交易先寫／定位原始事件，再 upsert 結構化回覆；重跑可補齊舊事件的新欄位並更新對照，不會重複增加 form_responses。事件 inserted/skipped 輸出維持原意，skipped 不代表略過結構化更新。
+
+### 欄位對照與日期
+
+```dotenv
+GOOGLE_FORMS_MEMBER_COLUMN=是否是社員
+GOOGLE_FORMS_ATTENDANCE_COLUMN=是否要參加
+GOOGLE_FORMS_EVENT_DATE_COLUMN=活動日期
+GOOGLE_FORMS_SUBMITTED_AT_COLUMN=時間戳記
+GOOGLE_FORMS_DATE_UTC_OFFSET_HOURS=8
+```
+
+欄位名需完全符合工作表標題。接受明確中文是／否、社員／非社員、參加／不參加與 yes/no/true/false，數字代碼及未知答案不推斷，存 NULL 並記錄欄位錯誤代碼。缺少題目則 NULL，不視為否。
+
+活動日期與填表時間分開：活動日期接受 YYYY-MM-DD、YYYY/MM/DD 或含時區 ISO datetime，後者依 UTC offset 轉為當地日曆日期（預設台灣 +8）；填表時間須含時區，內部轉 UTC。日期不合法時保留 NULL 與診斷代碼。
+
+使用者提供「工作坊3－物聯網專題」表單作格式參考，已唯讀檢視題目為「姓名」「是否是社員」（是／否）。沒有是否參加／日期題目，活動說明列兩場日期，不能推成單一活動日期，也不因填表就推定參加。使用者確認沒有對應 Apps Script、不是新資料源，因此沒有更換現有 URL 或 source ID。姓名仍在 raw_payload.answers，未新增姓名欄，亦不向 Agent 傳送。
+
+### 操作與驗證
+
+先執行 scripts.manage migrate，再執行 app.form_worker。Neon migration 已成功；既有兩筆測試回覆已重新同步（read=2、inserted=0、skipped=2），用於補入結構化表。test/temp 沒有社員、參加或活動日期答案，欄位須保持 NULL，來源時間戳正常解析。
+
+19 項離線測試通過，另已審查 0005 的 SQL 輸出。tests.test_platform 新增結構化入庫、重跑去重與重新映射測試，migration 斷言更新為 0005；尚未在隔離 PostgreSQL 跑完整套件。此為結構化入庫階段的驗證；後續 Agent 已改用這些結構化欄位，見第 5、11 節。無需修改 Apps Script；改成正式題目後依上方設定對照再同步即可。
+
+
+## 11. Agent 改用 form_responses（同日最終狀態）
+
+依使用者要求，Agent 摘要入口現在只選取 form_responses 的結構化欄位。先前 test/temp 平均值驗證為歷史紀錄，不再是目前摘要內容。沒有新增 migration 或更換表單來源，前端與工作佇列 API 不變。
+
+修改 app/form_summary.py、app/agent_runner.py、app/config.py、.env.example、tests/test_agent_runner.py、tests/test_platform.py、backend/README.md 及本交接。移除數值欄位設定、更新 local 建議／模型提示；整合測試改驗證結構化統計與來源／workspace 隔離。
+
+20 項離線測試通過，確認結構化值改變會影響結果、未知不算成否、日期分組、模型工具資料傳遞、不洩漏個資、DB 失敗不回退及空資料處理。真實模型與隔離 PostgreSQL 完整套件尚未執行。重啟 API／Agent worker 後建立新工作即可使用最新流程，最新程式與本文件以「feat: 新增結構化表單欄位並讓 Agent 讀取 form_responses」共同提交至 dengdee，實際 hash 以 Git 紀錄為準。
+
+真實 Neon 到 local Agent 的最新唯讀驗證成功：storage_table=form_responses、2 筆回覆；membership 與 attendance 均為 yes=0、no=0、unknown=2，活動日期沒有已知值，填表時間已知 2 筆，正規化錯誤 0 筆。沒有讀取 Apps Script、寫入資料庫或呼叫付費模型。這符合現有 test/temp 資料沒有社員／參加答案的情況，沒有捏造否定答案或回退原始數值。

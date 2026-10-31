@@ -38,7 +38,7 @@ def run(action):
             c.execute(text("SELECT 1"))
             revision = c.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
             tables = set(inspect(c).get_table_names())
-            expected = {"workspaces","members","goals","strategies","executions","execution_actions","observations","external_events","agent_runs","agent_run_checkpoints"}
+            expected = {"workspaces","members","goals","strategies","executions","execution_actions","observations","external_events","agent_runs","agent_run_checkpoints","form_responses"}
             expected_revision = ScriptDirectory.from_config(config).get_current_head()
             if not expected <= tables or revision != expected_revision:
                 raise RuntimeError("Schema not up to date")

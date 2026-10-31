@@ -24,21 +24,26 @@ def _read_summary(state: RunState) -> dict:
 def _recommend(state: RunState) -> dict:
     summary = state["form_summary"]
     count = summary["response_count"]
-    stats = "；".join(
-        f"{name}：有效 {value['count']} 筆，平均 {value['mean']}，最小 {value['min']}，最大 {value['max']}"
-        for name, value in summary["numeric_fields"].items() if value["count"]
+    members, attendance = summary["membership"], summary["attendance"]
+    dates = "、".join(f"{day}（{total} 筆）" for day, total in summary["event_dates"].items())
+    direction = (
+        f"已讀取 form_responses 的 {count} 筆回覆。"
+        f"社員 {members['yes']} 筆、非社員 {members['no']} 筆、未知 {members['unknown']} 筆；"
+        f"願意參加 {attendance['yes']} 筆、不參加 {attendance['no']} 筆、未知 {attendance['unknown']} 筆。"
+        + (f"活動日期：{dates}。" if dates else "活動日期尚未提供。")
+        + ("可先針對願意參加者提供活動資訊與行前提醒；尚不能據此判斷內容偏好。"
+           if attendance["yes"] else "尚無明確願意參加的回覆，先補齊意願資料，再決定後續宣傳。")
+        if count else "form_responses 尚無此來源的回覆，請先執行表單同步。"
     )
-    direction = (f"已讀取 Neon 的 {count} 筆表單回覆。{stats}。請先定義題目意義，再制定活動宣傳建議。"
-                 if count else "Neon 尚無此來源的表單回覆，請先執行表單同步。")
     return {"recommendation": {
         "target_audience": "目前資料不足以判斷受眾偏好",
         "content_direction": direction,
-        "reason": f"依據 Neon 已匯入的 {count} 筆回覆；僅使用允許欄位的聚合數值。",
+        "reason": f"依據 Neon 已匯入的 {count} 筆回覆；僅使用 form_responses 的結構化統計。",
         "expected_metrics": ["response_count"],
         "goal": state["goal"], "context": state["context"], "constraints": state["constraints"],
         "data_source": summary["source"], "form_summary": summary,
         "summary_id": summary["summary_id"],
-        "evidence": {"response_count": count, "numeric_fields": summary["numeric_fields"]},
+        "evidence": {"response_count": count, "membership": members, "attendance": attendance, "event_dates": summary["event_dates"]},
     }}
 
 
@@ -114,7 +119,7 @@ def _run_model(*, goal: str, context: str, constraints: dict, provider: str, mod
 
     @tool
     def get_form_summary_tool() -> dict:
-        """取得 Neon 已匯入表單的筆數與允許數值欄位統計，不含逐筆資料。"""
+        """取得 Neon form_responses 的社員、參加意願與日期統計，不含逐筆資料。"""
         return summary
 
     tools = [get_form_summary_tool]
@@ -126,7 +131,8 @@ def _run_model(*, goal: str, context: str, constraints: dict, provider: str, mod
                 content=(
                     "你是行銷分析助理，必須先呼叫 get_form_summary_tool，"
                     "再以繁體中文說明資料。只引用工具摘要，不編造數字。"
-                    "test、temp 尚無業務定義，不可猜成偏好。資料不足時明確說明。"
+                    "資料來自 form_responses。unknown 表示未知，不能算成否。"
+                    "願意參加不等於實際到場，社員身分與意願也不代表內容偏好；資料不足時明確說明。"
                 )
             ),
             *state["messages"],
@@ -153,7 +159,7 @@ def _run_model(*, goal: str, context: str, constraints: dict, provider: str, mod
     if not tool_called:
         raise RuntimeError("Agent completed without reading the required form-summary tool")
     return {
-        "target_audience": "目前欄位未定義受眾偏好",
+        "target_audience": "依社員身分與參加意願分析，尚無內容偏好資料",
         "content_direction": final_text,
         "reason": f"模型已讀取 Neon 的 {summary['response_count']} 筆回覆摘要。",
         "expected_metrics": ["response_count"],

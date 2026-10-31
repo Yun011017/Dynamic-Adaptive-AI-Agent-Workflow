@@ -22,7 +22,11 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     google_forms_apps_script_url: str = ""
     google_forms_source_id: str = "connection-test"
-    google_forms_agent_numeric_fields: str = "test,temp"
+    google_forms_member_column: str = "是否是社員"
+    google_forms_attendance_column: str = "是否要參加"
+    google_forms_event_date_column: str = "活動日期"
+    google_forms_submitted_at_column: str = "時間戳記"
+    google_forms_date_utc_offset_hours: int = Field(default=8, ge=-12, le=14)
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parents[1] / ".env",
