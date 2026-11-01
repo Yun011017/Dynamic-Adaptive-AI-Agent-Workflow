@@ -24,9 +24,10 @@ class Settings(BaseSettings):
     google_forms_source_id: str = "connection-test"
     google_forms_member_column: str = "是否是社員"
     google_forms_attendance_column: str = "是否要參加"
-    google_forms_event_date_column: str = "活動日期"
+    google_forms_school_column: str = "學校"
+    google_forms_department_grade_column: str = "系級"
+    google_forms_activity_column: str = "參加的活動"
     google_forms_submitted_at_column: str = "時間戳記"
-    google_forms_date_utc_offset_hours: int = Field(default=8, ge=-12, le=14)
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parents[1] / ".env",

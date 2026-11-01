@@ -19,7 +19,7 @@ GOOGLE_FORMS_SOURCE_ID=connection-test
 ..\.venv\Scripts\python.exe -m app.form_worker
 ```
 
-此指令讀取一次後結束，獨立於 `app.agent_worker`，不呼叫模型、沒有前端觸發或自動排程。輸出 `read`、`inserted`、`skipped` 筆數；失敗回傳非零 exit code，不印原始資料或憑證。
+此指令可獨立同步一次後結束，不呼叫模型。`app.agent_worker` 現在每領取一筆工作也會先嘗試同步，平常不必另外手動執行本指令。輸出 `read`、`inserted`、`skipped` 筆數；失敗回傳非零 exit code，不印原始資料或憑證。
 
 逐筆答案保存於 Neon `external_events.raw_payload.answers`，擷取時間為 `raw_payload.fetched_at`，provider 為 `google_forms_apps_script`，source_account 為上述來源 ID。來源時間欄位原樣保存在 answers，不另猜測題目語意。所有回覆先驗證，再於單一交易寫入，失敗整批回滾。
 
@@ -37,13 +37,15 @@ GOOGLE_FORMS_SOURCE_ID=connection-test
 
 ## 結構化表單回覆欄位
 
-Migration `0005` 新增 `form_responses`，原始答案仍保存在 external_events，兩者以同 workspace 的 external_event_id 關聯：
+Migration `0005` 建立 `form_responses`；`0006` 新增學校、系級及活動名稱。原始答案仍保存在 external_events，兩者以同 workspace 的 external_event_id 關聯：
 
 | 欄位 | 型別 | 說明 |
 | --- | --- | --- |
 | is_member | nullable boolean | 是否為社員；是／否／未知 NULL 分開。 |
 | will_attend | nullable boolean | 是否參加；缺少題目或未知答案不推定為否。 |
-| event_date | nullable date | 活動日期，與填表時間分開。 |
+| school | nullable varchar(255) | 學校，供客群統計。 |
+| department_grade | nullable varchar(255) | 系級，保留合併文字，不猜測科系與年級。 |
+| activity_name | nullable varchar(255) | 參加的活動名稱，取代原活動日期用途。 |
 | submitted_at | nullable timestamptz | 填表時間，統一 UTC。 |
 | normalization_errors | JSON array | 無效答案／日期的欄位錯誤代碼，不包含原始答案。 |
 
@@ -54,12 +56,13 @@ Migration `0005` 新增 `form_responses`，原始答案仍保存在 external_eve
 ```dotenv
 GOOGLE_FORMS_MEMBER_COLUMN=是否是社員
 GOOGLE_FORMS_ATTENDANCE_COLUMN=是否要參加
-GOOGLE_FORMS_EVENT_DATE_COLUMN=活動日期
+GOOGLE_FORMS_SCHOOL_COLUMN=學校
+GOOGLE_FORMS_DEPARTMENT_GRADE_COLUMN=系級
+GOOGLE_FORMS_ACTIVITY_COLUMN=參加的活動
 GOOGLE_FORMS_SUBMITTED_AT_COLUMN=時間戳記
-GOOGLE_FORMS_DATE_UTC_OFFSET_HOURS=8
 ```
 
-「是／否」、社員與參加的明確文字選項及布林值會轉成 boolean，不猜測數字代碼或「尚未決定」。未知值存 NULL 並記錄錯誤碼；缺少題目則存 NULL。日期接受 YYYY-MM-DD／YYYY/MM/DD；Apps Script 的含時區 ISO 日期轉為設定 UTC offset 的當地日期，預設台灣 +8，避免午夜被轉成前一天。填表時間必須含時區，無法解析則存 NULL 並留錯誤碼。
+「是／否」、社員與參加的明確文字選項及布林值會轉成 boolean，不猜測數字代碼或「尚未決定」。未知值存 NULL 並記錄錯誤碼；缺少題目則存 NULL。學校、系級、活動名稱須為文字，經 NFKC、頭尾去空白與連續空白合併，最多 255 字元；缺漏存 NULL，無效型別或過長資料記錄錯誤碼。不自行合併學校簡稱，也不拆分系級。活動目前為單一文字，複選整格內容不會自動拆成多場活動。填表時間必須含時區，內部仍轉 UTC。舊 event_date 僅保留歷史資料，不再匯入或供 Agent 查詢，日期不會被轉成活動名稱；舊日期設定已不再使用。
 
 先 migration 再同步（在 backend 目錄）：
 
@@ -73,7 +76,7 @@ GOOGLE_FORMS_DATE_UTC_OFFSET_HOURS=8
 Agent 現在改從 form_responses 讀取結構化統計，詳細說明如下。
 
 ```powershell
-..\.venv\Scripts\python.exe -m unittest tests.test_agent_runner tests.test_form_sync tests.test_form_fields -v
+..\.venv\Scripts\python.exe -m unittest tests.test_agent_runner tests.test_form_sync tests.test_form_fields tests.test_agent_worker -v
 ```
 
 ## Agent 讀取已匯入表單
@@ -88,15 +91,16 @@ Agent 現在改從 form_responses 讀取結構化統計，詳細說明如下。
 | response_count | 已同步結構化回覆總筆數 |
 | membership | 社員 yes／非社員 no／未知 unknown 筆數 |
 | attendance | 願意參加 yes／不參加 no／未知 unknown 筆數 |
-| event_dates | 每個活動日期的回覆筆數（ISO 日期） |
-| event_date_unknown_count | 缺少活動日期的筆數 |
+| schools／school_unknown_count | 各學校筆數及缺漏筆數 |
+| department_grades／department_grade_unknown_count | 各系級筆數及缺漏筆數 |
+| activities／activity_unknown_count | 各參加活動名稱筆數及缺漏筆數 |
 | submission_period | 填表時間已知／未知筆數及最早／最晚 UTC 時間 |
 | normalization_error_count | 含正規化錯誤的回覆筆數，不包含錯誤原文 |
 | summary_id | 當次摘要 SHA-256 |
 
 不傳姓名、Email、原始答案、逐筆紀錄或來源 URL。未知不視為否，參加意願不等於實際到場，也不能解釋為內容偏好。舊 GOOGLE_FORMS_AGENT_NUMERIC_FIELDS 設定已不再使用，test/temp 不再進入摘要。
 
-先執行 scripts.manage migrate 至 0005，再執行 app.form_worker 更新結構化資料；Agent 不會自行讀 Apps Script，也不會在 form_responses 無資料時回退原始資料或假摘要。已存在的 raw events 需重新同步補齊結構化列。空來源正常回報 0；查詢錯誤使工作失敗。
+先執行 scripts.manage migrate 至 0006。Agent worker 領取工作後會先同步 Apps Script，再讀 form_responses；同步失敗會回滾同步交易，沿用已保存資料。單獨呼叫 run_agent／get_form_summary 不會同步，也不會在 form_responses 無資料時回退原始資料或假摘要。已存在的 raw events 需重新同步補齊結構化列。空來源正常回報 0；查詢錯誤使工作失敗。
 
 在 backend 目錄直接唯讀測試 local Agent，不建立工作紀錄也不呼叫外部模型：
 
@@ -104,13 +108,23 @@ Agent 現在改從 form_responses 讀取結構化統計，詳細說明如下。
 ..\.venv\Scripts\python.exe -c "import json; from app.agent_runner import run_agent; print(json.dumps(run_agent(goal='分析表單社員與參加意願', context='', constraints={}), ensure_ascii=False, indent=2))"
 ```
 
-前端建立新工作也使用相同摘要，重啟 API 與 Agent worker 即可。API data_source 仍為 neon_form_summary，前端不用更改；已完成工作保留舊結果，不回寫。輸出保存 form_summary／summary_id，local evidence 也保存社員、參加與日期依據。模型模式確認摘要工具被呼叫，但自然語言數字仍未逐一核對。
+前端建立新工作也使用相同摘要，重啟 API 與 Agent worker 即可。API data_source 仍為 neon_form_summary，前端不用更改；已完成工作保留舊結果，不回寫。輸出保存 form_summary／summary_id，local evidence 也保存社員、參加、學校、系級與活動依據。模型模式確認摘要工具被呼叫，但自然語言數字仍未逐一核對。
 
 離線測試（不連 Neon）：
 
 ```powershell
-..\.venv\Scripts\python.exe -m unittest tests.test_agent_runner tests.test_form_sync tests.test_form_fields -v
+..\.venv\Scripts\python.exe -m unittest tests.test_agent_runner tests.test_form_sync tests.test_form_fields tests.test_agent_worker -v
 ```
+
+## Agent worker 自動同步與失敗回退
+
+每筆工作流程為「領取並提交 RUNNING → 獨立交易同步表單 → 從 form_responses 讀摘要 → Agent 分析 → 保存結果」。沒有等待工作的閒置輪詢不會讀取表單，避免每兩秒重複連線；若只想同步而不分析，仍可執行 app.form_worker。
+
+同步失敗（網址未設定、連線、格式或寫入錯誤）不會直接讓 Agent 工作失敗，改讀資料庫舊資料。沒有舊回覆時回報資料不足，不補假資料；若 Neon 本身無法讀取或 Agent 執行失敗，工作仍為 FAILED。既有外部來源只綁定 PLATFORM_WORKSPACE_SLUG，其他 workspace 的工作不能將這個來源匯入其範圍。
+
+結果新增 output_payload.form_sync：status、attempted_at、成功時 read／inserted／skipped、失敗時遮罩 error_code／message，以及 fallback_used。只有同步失敗且摘要確實有舊資料時 fallback_used=true。前端現有「建議依據」會顯示失敗沿用舊資料或無資料的提示，無需改前端。結束 checkpoint 也保存同步狀態，不保存例外原文。
+
+啟用只需重啟 Agent worker，建立新工作；已完成工作不會重算。GitHub Actions 新增 Secret GOOGLE_FORMS_APPS_SCRIPT_URL，以及可選 Variables GOOGLE_FORMS_SOURCE_ID、PLATFORM_WORKSPACE_SLUG 與各 GOOGLE_FORMS_*_COLUMN；範例預設同本機。未設定端點時允許回退，不阻擋原有 Agent 工作。此次僅修改 workflow，未更新 repository 設定或部署。
 
 ---
 

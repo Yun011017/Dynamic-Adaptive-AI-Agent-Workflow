@@ -115,10 +115,18 @@ def save_responses(db, responses, *, workspace_slug, source_id):
     return {'read': len(responses), 'inserted': inserted, 'skipped': len(responses) - inserted}
 
 
-def sync_once():
+def sync_once(*, workspace_id=None):
     from .db import SessionLocal
+    from .models import Workspace
     # Fetch and validate before opening a database transaction.
     responses = parse_responses(fetch_table())
     with SessionLocal.begin() as db:
+        if workspace_id is not None:
+            # The configured external source belongs only to this deployment's workspace.
+            authorized = db.scalar(select(Workspace.id).where(
+                Workspace.id == workspace_id, Workspace.slug == settings.platform_workspace_slug,
+                Workspace.status == 'active'))
+            if authorized is None:
+                raise FormSyncError('Form source is not configured for this workspace')
         return save_responses(db, responses, workspace_slug=settings.platform_workspace_slug,
                               source_id=settings.google_forms_source_id)

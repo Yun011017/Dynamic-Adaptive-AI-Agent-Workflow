@@ -142,7 +142,7 @@ class PlatformTests(unittest.TestCase):
     def test_09_repeated_migrate(self):
         command.upgrade(self.config,"head")
         with engine.connect() as c:
-            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0005")
+            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0006")
 
     def test_10_agent_run_is_saved_and_scoped(self):
         response = self.client.post(
@@ -159,10 +159,12 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual(run["status"], "PENDING")
         self.assertEqual(run["agent_provider"], "local")
         self.assertIsNone(run["output_payload"])
-        self.assertEqual(process_one_run(), run["run_id"])
+        with patch("app.agent_worker.sync_once", return_value={"read": 0, "inserted": 0, "skipped": 0}):
+            self.assertEqual(process_one_run(), run["run_id"])
         run = self.client.get(f"/agent/runs/{run['run_id']}", headers=self.headers).json()
         self.assertEqual(run["status"], "COMPLETED")
         self.assertEqual(run["output_payload"]["data_source"], "neon_form_summary")
+        self.assertEqual(run["output_payload"]["form_sync"]["status"], "succeeded")
         self.assertEqual(
             self.client.get(f"/agent/runs/{run['run_id']}", headers=self.headers).status_code,
             200,
@@ -210,9 +212,8 @@ class PlatformTests(unittest.TestCase):
     def test_13_structured_fields_are_saved_and_remapped(self):
         from app.form_sync import parse_responses, save_responses
         from app.models import FormResponse
-        from datetime import date
-        rows = parse_responses([['是否是社員', '是否要參加', '活動日期', '時間戳記'],
-                                ['是', '不參加', '2026-11-15', '2026-10-31T00:00:00Z']])
+        rows = parse_responses([['是否是社員', '是否要參加', '學校', '系級', '參加的活動', '時間戳記'],
+                                ['是', '不參加', '臺大', '資工二', '物聯網工作坊', '2026-10-31T00:00:00Z']])
         with SessionLocal.begin() as db:
             first = save_responses(db, rows, workspace_slug='development', source_id='structured-test')
         with SessionLocal.begin() as db:
@@ -223,20 +224,50 @@ class PlatformTests(unittest.TestCase):
             result = db.query(FormResponse).filter_by(source_id='structured-test').one()
             self.assertTrue(result.is_member)
             self.assertFalse(result.will_attend)
-            self.assertEqual(result.event_date, date(2026, 11, 15))
+            self.assertEqual(result.school, '臺大')
+            self.assertEqual(result.department_grade, '資工二')
+            self.assertEqual(result.activity_name, '物聯網工作坊')
             self.assertIsNotNone(result.submitted_at)
         from app.form_summary import get_form_summary
         with patch.object(settings, 'google_forms_source_id', 'structured-test'):
             summary = get_form_summary()
             self.assertEqual(summary['membership']['yes'], 1)
             self.assertEqual(summary['attendance']['no'], 1)
-            self.assertEqual(summary['event_dates'], {'2026-11-15': 1})
+            self.assertEqual(summary['activities'], {'物聯網工作坊': 1})
+            self.assertEqual(summary['schools'], {'臺大': 1})
+            self.assertEqual(summary['department_grades'], {'資工二': 1})
         # A remapping of existing source data refreshes typed fields without duplicating raw events.
         with patch.object(settings, 'google_forms_member_column', 'missing'):
             with SessionLocal.begin() as db:
                 save_responses(db, rows, workspace_slug='development', source_id='structured-test')
         with SessionLocal() as db:
             self.assertIsNone(db.query(FormResponse).filter_by(source_id='structured-test').one().is_member)
+
+
+    def test_14_sync_write_failure_rolls_back_and_agent_uses_saved_data(self):
+        from app.form_sync import parse_responses, save_responses, PROVIDER
+        from app.models import FormResponse
+        original_save = save_responses
+        rows = parse_responses([['test'], [1], [2]])
+        with SessionLocal.begin() as db:
+            save_responses(db, rows, workspace_slug='development', source_id='fallback-integration')
+        def fail_after_writes(db, responses, **kwargs):
+            original_save(db, responses, **kwargs)
+            raise RuntimeError('SECRET simulated DB failure')
+        with patch.object(settings, 'google_forms_source_id', 'fallback-integration'):
+            response = self.client.post('/agent/runs', headers=self.headers, json={'goal': 'Verify sync fallback'})
+            self.assertEqual(response.status_code, 202)
+            run_id = response.json()['run_id']
+            with patch('app.form_sync.fetch_table', return_value=[['test'], [1], [2], [3]]), patch('app.form_sync.save_responses', side_effect=fail_after_writes):
+                self.assertEqual(process_one_run(), run_id)
+            result = self.client.get(f'/agent/runs/{run_id}', headers=self.headers).json()
+        self.assertEqual(result['status'], 'COMPLETED')
+        self.assertEqual(result['output_payload']['form_summary']['response_count'], 2)
+        self.assertTrue(result['output_payload']['form_sync']['fallback_used'])
+        self.assertNotIn('SECRET', str(result['output_payload']))
+        with SessionLocal() as db:
+            self.assertEqual(db.query(ExternalEvent).filter_by(provider=PROVIDER, source_account='fallback-integration').count(), 2)
+            self.assertEqual(db.query(FormResponse).filter_by(source_id='fallback-integration').count(), 2)
 
 
 if __name__ == "__main__":

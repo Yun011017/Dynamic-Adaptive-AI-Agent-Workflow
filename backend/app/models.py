@@ -143,7 +143,11 @@ class FormResponse(TenantRow, Base):
     source_id: Mapped[str] = mapped_column(String(255))
     is_member: Mapped[bool | None] = mapped_column(Boolean)
     will_attend: Mapped[bool | None] = mapped_column(Boolean)
-    event_date: Mapped[date | None] = mapped_column(Date)
+    school: Mapped[str | None] = mapped_column(String(255))
+    department_grade: Mapped[str | None] = mapped_column(String(255))
+    activity_name: Mapped[str | None] = mapped_column(String(255))
+    # Historical date only; new imports and Agent summaries use activity_name.
+    event_date: Mapped[date | None] = mapped_column(Date, comment="Legacy activity date; no longer populated or read by current form workflow")
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     normalization_errors: Mapped[list] = mapped_column(JSON, server_default="[]")
     __table_args__ = (

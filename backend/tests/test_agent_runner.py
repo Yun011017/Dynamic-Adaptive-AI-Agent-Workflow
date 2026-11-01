@@ -1,6 +1,6 @@
 import json
 import unittest
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from langchain_core.messages import AIMessage
@@ -11,7 +11,7 @@ from app.schemas import AgentRunCreate
 
 def sample(values=(True, False)):
     return summarize_responses([
-        {"is_member": value, "will_attend": value, "event_date": date(2026, 11, 15),
+        {"is_member": value, "will_attend": value, "school": "臺大", "department_grade": "資工二", "activity_name": "物聯網工作坊",
          "submitted_at": datetime(2026, 10, 31, tzinfo=timezone.utc), "normalization_errors": [],
          "Email": "private@example.test", "test": 99} for value in values
     ], source_id="test-source")
@@ -40,7 +40,9 @@ class AgentRunnerTests(unittest.TestCase):
         result = sample((True, False, None))
         self.assertEqual(result["membership"], dict(yes=1, no=1, unknown=1))
         self.assertEqual(result["attendance"], dict(yes=1, no=1, unknown=1))
-        self.assertEqual(result["event_dates"], {"2026-11-15": 3})
+        self.assertEqual(result["schools"], {"臺大": 3})
+        self.assertEqual(result["department_grades"], {"資工二": 3})
+        self.assertEqual(result["activities"], {"物聯網工作坊": 3})
         self.assertNotIn("private@example.test", json.dumps(result))
         self.assertNotIn("Email", json.dumps(result))
         self.assertNotIn("numeric_fields", result)
@@ -53,10 +55,10 @@ class AgentRunnerTests(unittest.TestCase):
         self.assertEqual(result["form_summary"]["response_count"], 0)
 
     def test_all_unknown_does_not_mean_no(self):
-        summary = summarize_responses([dict(is_member=None, will_attend=None, event_date=None, submitted_at=None,
+        summary = summarize_responses([dict(is_member=None, will_attend=None, school=None, department_grade=None, activity_name=None, submitted_at=None,
                                             normalization_errors=["is_member:unknown_value"])], source_id="test-source")
         self.assertEqual(summary["attendance"], dict(yes=0, no=0, unknown=1))
-        self.assertEqual(summary["event_date_unknown_count"], 1)
+        self.assertEqual(summary["activity_unknown_count"], 1)
         self.assertIsNone(summary["submission_period"]["first"])
         self.assertEqual(summary["normalization_error_count"], 1)
         with patch("app.agent_runner.get_form_summary", return_value=summary):
@@ -91,3 +93,18 @@ class AgentRunnerTests(unittest.TestCase):
         self.assertEqual(AgentRunCreate(goal="test").data_source, "neon_form_summary")
         with self.assertRaises(ValueError):
             AgentRunCreate(goal="test", data_source="arbitrary")
+
+    def test_audience_data_changes_summary_and_recommendation(self):
+        rows = [dict(is_member=True, will_attend=True, school='臺大', department_grade='資工二', activity_name='物聯網'),
+                dict(is_member=None, will_attend=False, school='臺科大', department_grade='電機三', activity_name='3D列印'),
+                dict(is_member=False, will_attend=None, school=None, department_grade=None, activity_name=None)]
+        summary = summarize_responses(rows, source_id='test-source')
+        self.assertEqual(summary['schools'], {'臺大': 1, '臺科大': 1})
+        self.assertEqual(summary['school_unknown_count'], 1)
+        self.assertEqual(summary['department_grade_unknown_count'], 1)
+        self.assertEqual(summary['activity_unknown_count'], 1)
+        with patch('app.agent_runner.get_form_summary', return_value=summary):
+            result = run_agent(goal='分析客群', context='', constraints={})
+        self.assertIn('資工二', result['content_direction'])
+        self.assertIn('物聯網', result['content_direction'])
+        self.assertNotIn('event_dates', summary)

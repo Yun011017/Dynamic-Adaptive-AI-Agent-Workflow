@@ -1,6 +1,6 @@
 """Explicit question mappings; absent/unknown answers never become False."""
 import unicodedata
-from datetime import date, datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from .config import settings
 
@@ -29,22 +29,23 @@ def normalize_fields(answers):
                         {'是', '是社員', '社員', 'yes', 'true'}, {'否', '不是社員', '非社員', 'no', 'false'})
     will_attend = boolean(settings.google_forms_attendance_column, 'will_attend',
                           {'是', '要', '參加', '會參加', 'yes', 'true'}, {'否', '不要', '不參加', '不會參加', 'no', 'false'})
-    event_date = submitted_at = None
-    value = answers.get(settings.google_forms_event_date_column)
-    if value is not None and value != '':
-        try:
-            if not isinstance(value, str):
-                raise ValueError()
-            text = value.strip().replace('/', '-')
-            if 'T' in text:
-                parsed = datetime.fromisoformat(text.replace('Z', '+00:00'))
-                if parsed.tzinfo is None:
-                    raise ValueError()
-                event_date = parsed.astimezone(timezone(timedelta(hours=settings.google_forms_date_utc_offset_hours))).date()
-            else:
-                event_date = date.fromisoformat(text)
-        except ValueError:
-            errors.append('event_date:invalid_date')
+    def text(column, field):
+        value = answers.get(column)
+        if value is None or value == '':
+            return None
+        if not isinstance(value, str):
+            errors.append(field + ':invalid_text')
+            return None
+        normalized = ' '.join(unicodedata.normalize('NFKC', value).split())
+        if len(normalized) > 255:
+            errors.append(field + ':too_long')
+            return None
+        return normalized or None
+
+    school = text(settings.google_forms_school_column, 'school')
+    department_grade = text(settings.google_forms_department_grade_column, 'department_grade')
+    activity_name = text(settings.google_forms_activity_column, 'activity_name')
+    submitted_at = None
     value = answers.get(settings.google_forms_submitted_at_column)
     if value is not None and value != '':
         try:
@@ -56,5 +57,6 @@ def normalize_fields(answers):
             submitted_at = parsed.astimezone(timezone.utc)
         except ValueError:
             errors.append('submitted_at:invalid_or_missing_timezone')
-    return dict(is_member=is_member, will_attend=will_attend, event_date=event_date,
+    return dict(is_member=is_member, will_attend=will_attend, school=school,
+                department_grade=department_grade, activity_name=activity_name,
                 submitted_at=submitted_at, normalization_errors=errors)

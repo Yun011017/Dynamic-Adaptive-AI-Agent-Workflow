@@ -18,15 +18,20 @@ def summarize_responses(responses, *, source_id):
             "unknown": sum(row.get(field) is None for row in responses),
         }
 
-    dates = Counter(row["event_date"].isoformat() for row in responses if row.get("event_date") is not None)
+    def text_counts(field):
+        return dict(sorted(Counter(row[field] for row in responses if row.get(field)).items()))
     submitted = [row["submitted_at"].astimezone(timezone.utc) for row in responses if row.get("submitted_at") is not None]
     summary = {
         "source": "neon_form_summary", "storage_table": "form_responses", "source_id": source_id,
         "response_count": len(responses),
         "membership": boolean_counts("is_member"),
         "attendance": boolean_counts("will_attend"),
-        "event_dates": dict(sorted(dates.items())),
-        "event_date_unknown_count": sum(row.get("event_date") is None for row in responses),
+        "schools": text_counts("school"),
+        "school_unknown_count": sum(not row.get("school") for row in responses),
+        "department_grades": text_counts("department_grade"),
+        "department_grade_unknown_count": sum(not row.get("department_grade") for row in responses),
+        "activities": text_counts("activity_name"),
+        "activity_unknown_count": sum(not row.get("activity_name") for row in responses),
         "submission_period": {
             "known_count": len(submitted), "unknown_count": len(responses) - len(submitted),
             "first": min(submitted).isoformat() if submitted else None,
@@ -53,7 +58,8 @@ def get_form_summary(*, workspace_id=None):
         if workspace_id is None:
             raise ValueError("Configured active workspace not found")
         responses = db.execute(select(
-            FormResponse.is_member, FormResponse.will_attend, FormResponse.event_date,
+            FormResponse.is_member, FormResponse.will_attend, FormResponse.school,
+            FormResponse.department_grade, FormResponse.activity_name,
             FormResponse.submitted_at, FormResponse.normalization_errors,
         ).join(ExternalEvent, (ExternalEvent.id == FormResponse.external_event_id)
                & (ExternalEvent.workspace_id == FormResponse.workspace_id)).where(

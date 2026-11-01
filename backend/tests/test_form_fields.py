@@ -1,5 +1,5 @@
 import unittest
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.form_fields import normalize_fields
@@ -9,18 +9,20 @@ from app.config import settings
 class FormFieldsTests(unittest.TestCase):
     def setUp(self):
         mappings = dict(google_forms_member_column='是否為社員', google_forms_attendance_column='是否要參加',
-                        google_forms_event_date_column='活動日期', google_forms_submitted_at_column='時間戳記',
-                        google_forms_date_utc_offset_hours=8)
+                        google_forms_school_column='學校', google_forms_department_grade_column='系級',
+                        google_forms_activity_column='參加的活動', google_forms_submitted_at_column='時間戳記')
         for name, value in mappings.items():
             patcher = patch.object(settings, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
 
     def test_explicit_booleans_and_dates(self):
-        result = normalize_fields({'是否為社員': ' 是 ', '是否要參加': '不參加', '活動日期': '2026/11/15', '時間戳記': '2026-10-31T12:00:00+08:00'})
+        result = normalize_fields({'是否為社員': ' 是 ', '是否要參加': '不參加', '學校': ' 臺灣大學 ', '系級': '資工二', '參加的活動': '物聯網工作坊', '時間戳記': '2026-10-31T12:00:00+08:00'})
         self.assertIs(result['is_member'], True)
         self.assertIs(result['will_attend'], False)
-        self.assertEqual(result['event_date'], date(2026, 11, 15))
+        self.assertEqual(result['school'], '臺灣大學')
+        self.assertEqual(result['department_grade'], '資工二')
+        self.assertEqual(result['activity_name'], '物聯網工作坊')
         self.assertEqual(result['submitted_at'], datetime(2026, 10, 31, 4, tzinfo=timezone.utc))
         self.assertEqual(result['normalization_errors'], [])
 
@@ -28,12 +30,14 @@ class FormFieldsTests(unittest.TestCase):
         result = normalize_fields({'test': 1, 'temp': 6})
         self.assertIsNone(result['is_member'])
         self.assertIsNone(result['will_attend'])
-        self.assertIsNone(result['event_date'])
+        self.assertIsNone(result['activity_name'])
+        self.assertIsNone(result['school'])
+        self.assertIsNone(result['department_grade'])
         self.assertIsNone(result['submitted_at'])
         self.assertEqual(result['normalization_errors'], [])
 
     def test_unknown_and_invalid_are_not_false(self):
-        result = normalize_fields({'是否為社員': 1, '是否要參加': '尚未決定', '活動日期': '2026-02-30', '時間戳記': '2026-10-31T12:00:00'})
+        result = normalize_fields({'是否為社員': 1, '是否要參加': '尚未決定', '學校': 123, '時間戳記': '2026-10-31T12:00:00'})
         self.assertIsNone(result['is_member'])
         self.assertIsNone(result['will_attend'])
         self.assertEqual(len(result['normalization_errors']), 4)
@@ -49,6 +53,22 @@ class FormFieldsTests(unittest.TestCase):
         self.assertIs(result['is_member'], False)
         self.assertIs(result['will_attend'], True)
 
-    def test_google_date_uses_taiwan_calendar_day(self):
+    def test_legacy_date_is_not_an_activity(self):
         result = normalize_fields({'活動日期': '2026-11-14T16:00:00.000Z'})
-        self.assertEqual(result['event_date'], date(2026, 11, 15))
+        self.assertIsNone(result['activity_name'])
+        self.assertNotIn('event_date', result)
+
+    def test_text_normalization_and_limits(self):
+        result = normalize_fields({'學校': '  Ａ大學  ', '系級': '資工  二年級', '參加的活動': ' '})
+        self.assertEqual(result['school'], 'A大學')
+        self.assertEqual(result['department_grade'], '資工 二年級')
+        self.assertIsNone(result['activity_name'])
+        bad = normalize_fields({'學校': 'x' * 256, '系級': 123})
+        self.assertIsNone(bad['school'])
+        self.assertEqual(bad['normalization_errors'], ['school:too_long', 'department_grade:invalid_text'])
+
+    def test_custom_question_titles(self):
+        with patch.object(settings, 'google_forms_school_column', '就讀學校'), patch.object(settings, 'google_forms_activity_column', '報名活動'):
+            result = normalize_fields({'就讀學校': '臺大', '報名活動': '工作坊'})
+        self.assertEqual(result['school'], '臺大')
+        self.assertEqual(result['activity_name'], '工作坊')
