@@ -50,6 +50,7 @@ type ContentDraft = {
   status: string;
   draft_version: number;
   payload: {
+    channel?: "instagram";
     title?: string;
     caption?: string;
     hashtags?: string[];
@@ -100,6 +101,7 @@ export default function Dashboard() {
   const [draftForm, setDraftForm] = useState(blankDraft);
   const [editingDraft, setEditingDraft] = useState<ContentDraft | null>(null);
   const [draftSaving, setDraftSaving] = useState(false);
+  const [scheduleSaving, setScheduleSaving] = useState<number | null>(null);
   const [draftGenerationRun, setDraftGenerationRun] = useState<string | null>(null);
   const [draftGenerating, setDraftGenerating] = useState(false);
   const [selected, setSelected] = useState(null);
@@ -308,6 +310,9 @@ export default function Dashboard() {
         body: JSON.stringify({
           channel: "instagram",
           content_format: draftForm.carousel ? "carousel" : "single",
+          scheduled_at: draftForm.scheduledAt
+            ? new Date(draftForm.scheduledAt).toISOString()
+            : null,
         }),
       });
       setRuns((all) => [run, ...all]);
@@ -334,6 +339,35 @@ export default function Dashboard() {
       carousel: Boolean(draft.payload.carousel),
     });
     document.getElementById("draft-form")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  async function cancelSchedule(draft: ContentDraft) {
+    setScheduleSaving(draft.id);
+    setError("");
+    try {
+      const revised = await call(`/content-drafts/${draft.id}/versions`, {
+        method: "POST",
+        body: JSON.stringify({
+          channel: draft.payload.channel || "instagram",
+          title: draft.payload.title || "未命名內容提案",
+          caption: draft.payload.caption || "未命名內容",
+          hashtags: draft.payload.hashtags || [],
+          image_requirements: draft.payload.image_requirements || [],
+          image_urls: draft.payload.image_urls || [],
+          carousel: Boolean(draft.payload.carousel),
+          scheduled_at: null,
+        }),
+      });
+      setDrafts((all) => [
+        revised,
+        ...all.map((item) =>
+          item.id === draft.id ? { ...item, status: "SUPERSEDED" } : item,
+        ),
+      ]);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "無法取消排程。");
+    } finally {
+      setScheduleSaving(null);
+    }
   }
   const current = runs.find((run) => run.run_id === selected);
   const strategyRuns = runs.filter(
@@ -575,26 +609,6 @@ export default function Dashboard() {
                   </button>
                 )}
               </div>
-              {!editingDraft && (
-                <div className="rounded-xl bg-[#edf3f8] p-4">
-                  <p className="m-0 text-sm font-semibold text-maker-blue">由 Agent 自動產生內容草稿</p>
-                  <p className="mb-3 mt-1 text-sm text-maker-muted">
-                    會依下方貼文形式建立文案、hashtags 與素材需求；不會虛構圖片網址或直接發布。
-                  </p>
-                  <button
-                    type="button"
-                    disabled={draftGenerating}
-                    onClick={generateDraft}
-                    className="rounded-lg bg-maker-blue px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {draftGenerating
-                      ? "Agent 草稿產生中…"
-                      : draftForm.carousel
-                        ? "由 Agent 產生輪播草稿"
-                        : "由 Agent 產生單張草稿"}
-                  </button>
-                </div>
-              )}
               <label className="flex items-start gap-3 rounded-xl border border-maker-line p-4 text-sm">
                 <input
                   type="checkbox"
@@ -611,6 +625,40 @@ export default function Dashboard() {
                   </span>
                 </span>
               </label>
+              <Field label="預計發布時間（選填）">
+                <input
+                  type="datetime-local"
+                  className="input"
+                  min={new Date(Date.now() - new Date().getTimezoneOffset() * 60_000)
+                    .toISOString()
+                    .slice(0, 16)}
+                  value={draftForm.scheduledAt}
+                  onChange={(event) => setDraftForm({ ...draftForm, scheduledAt: event.target.value })}
+                />
+                <small className="mt-1 block text-maker-muted">
+                  設定後會儲存為已排程；目前只保存時間，不會自動發布。
+                </small>
+              </Field>
+              {!editingDraft && (
+                <div className="rounded-xl bg-[#edf3f8] p-4">
+                  <p className="m-0 text-sm font-semibold text-maker-blue">由 Agent 自動產生內容提案</p>
+                  <p className="mb-3 mt-1 text-sm text-maker-muted">
+                    會依上方貼文形式與排程時間建立文案、hashtags 與素材需求；不會虛構圖片網址或直接發布。
+                  </p>
+                  <button
+                    type="button"
+                    disabled={draftGenerating}
+                    onClick={generateDraft}
+                    className="rounded-lg bg-maker-blue px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {draftGenerating
+                      ? "Agent 提案產生中…"
+                      : draftForm.carousel
+                        ? "由 Agent 產生輪播提案"
+                        : "由 Agent 產生單張提案"}
+                  </button>
+                </div>
+              )}
               <Field label="提案名稱 *">
                 <input
                   className="input"
@@ -653,14 +701,6 @@ export default function Dashboard() {
                   placeholder="https://example.com/image.jpg"
                 />
               </Field>
-              <Field label="預計發布時間（選填）">
-                <input
-                  type="datetime-local"
-                  className="input"
-                  value={draftForm.scheduledAt}
-                  onChange={(event) => setDraftForm({ ...draftForm, scheduledAt: event.target.value })}
-                />
-              </Field>
               <button
                 disabled={draftSaving}
                 className="w-full rounded-xl bg-maker-blue px-4 py-3 font-semibold text-white transition hover:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
@@ -699,13 +739,25 @@ export default function Dashboard() {
                         </p>
                       )}
                       {!['SUPERSEDED', 'EXECUTING', 'SUCCEEDED'].includes(draft.status) && (
-                        <button
-                          type="button"
-                          onClick={() => beginRevision(draft)}
-                          className="mt-4 rounded-lg bg-stone-100 px-3 py-2 text-sm font-semibold text-maker-blue transition hover:bg-stone-200"
-                        >
-                          建立修改版本
-                        </button>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => beginRevision(draft)}
+                            className="rounded-lg bg-stone-100 px-3 py-2 text-sm font-semibold text-maker-blue transition hover:bg-stone-200"
+                          >
+                            {draft.payload.scheduled_at ? "修改提案或排程" : "修改提案或設定排程"}
+                          </button>
+                          {draft.payload.scheduled_at && (
+                            <button
+                              type="button"
+                              disabled={scheduleSaving === draft.id}
+                              onClick={() => cancelSchedule(draft)}
+                              className="rounded-lg border border-maker-line px-3 py-2 text-sm font-semibold text-maker-muted transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {scheduleSaving === draft.id ? "取消排程中…" : "取消排程"}
+                            </button>
+                          )}
+                        </div>
                       )}
                     </li>
                   ))}

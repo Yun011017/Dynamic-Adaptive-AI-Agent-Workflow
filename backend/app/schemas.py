@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -86,6 +86,8 @@ class ContentDraftCreate(BaseModel):
     def require_timezone_for_schedule(cls, value: datetime | None) -> datetime | None:
         if value is not None and value.tzinfo is None:
             raise ValueError("A scheduled time must include a timezone")
+        if value is not None and value <= datetime.now(timezone.utc):
+            raise ValueError("A scheduled time must be in the future")
         return value
 
     @model_validator(mode="after")
@@ -125,6 +127,8 @@ class ContentDraftGenerateRequest(BaseModel):
     def require_timezone_for_schedule(cls, value: datetime | None) -> datetime | None:
         if value is not None and value.tzinfo is None:
             raise ValueError("A scheduled time must include a timezone")
+        if value is not None and value <= datetime.now(timezone.utc):
+            raise ValueError("A scheduled time must be in the future")
         return value
 
 
