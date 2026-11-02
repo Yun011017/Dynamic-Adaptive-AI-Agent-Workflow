@@ -27,7 +27,7 @@ settings.platform_workspace_slug = "development"
 from app.db import engine, SessionLocal
 from app.agent_worker import process_one_run
 from app.main import app
-from app.models import AgentRun, AgentRunCheckpoint, Workspace, Goal, Strategy, Execution, ExternalEvent, Observation, Member
+from app.models import AgentRun, AgentRunCheckpoint, ExecutionAction, Workspace, Goal, Strategy, Execution, ExternalEvent, Observation, Member
 from app.retry import read_with_retry
 
 
@@ -142,7 +142,7 @@ class PlatformTests(unittest.TestCase):
     def test_09_repeated_migrate(self):
         command.upgrade(self.config,"head")
         with engine.connect() as c:
-            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0006")
+            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0007")
 
     def test_10_agent_run_is_saved_and_scoped(self):
         response = self.client.post(
@@ -268,6 +268,48 @@ class PlatformTests(unittest.TestCase):
         with SessionLocal() as db:
             self.assertEqual(db.query(ExternalEvent).filter_by(provider=PROVIDER, source_account='fallback-integration').count(), 2)
             self.assertEqual(db.query(FormResponse).filter_by(source_id='fallback-integration').count(), 2)
+
+    def test_15_content_drafts_are_versioned_scheduled_and_idempotent(self):
+        goal = self.client.post("/goals", headers=self.headers, json={"title": "Draft integration goal"}).json()
+        strategy = self.client.post(
+            f"/goals/{goal['id']}/strategies",
+            headers=self.headers,
+            json={"version": 1, "content": "Show hands-on projects"},
+        ).json()
+        payload = {
+            "channel": "instagram",
+            "caption": "Build your first project with us",
+            "hashtags": ["NTUMaker", "Arduino", "NTUMaker"],
+            "image_requirements": ["1080 by 1080 cover showing a student project"],
+            "image_urls": ["https://images.example.test/cover.jpg"],
+            "scheduled_at": "2030-01-02T18:30:00+08:00",
+        }
+        created = self.client.post(
+            f"/strategies/{strategy['id']}/content-drafts", headers=self.headers, json=payload
+        )
+        self.assertEqual(created.status_code, 201, created.text)
+        draft = created.json()
+        self.assertEqual(draft["status"], "SCHEDULED")
+        self.assertEqual(draft["draft_version"], 1)
+        self.assertEqual(draft["payload"]["hashtags"], ["NTUMaker", "Arduino"])
+        self.assertEqual(draft["payload"]["meta_adapter_payload"]["caption"], "Build your first project with us\n\n#NTUMaker #Arduino")
+        duplicate = self.client.post(
+            f"/strategies/{strategy['id']}/content-drafts", headers=self.headers, json=payload
+        )
+        self.assertEqual(duplicate.status_code, 201, duplicate.text)
+        self.assertEqual(duplicate.json()["id"], draft["id"])
+        revised = self.client.post(
+            f"/content-drafts/{draft['id']}/versions",
+            headers=self.headers,
+            json={**payload, "caption": "Build something real with us", "scheduled_at": None},
+        )
+        self.assertEqual(revised.status_code, 201, revised.text)
+        self.assertEqual(revised.json()["draft_version"], 2)
+        self.assertEqual(revised.json()["status"], "DRAFT")
+        with SessionLocal() as db:
+            previous = db.get(ExecutionAction, draft["id"])
+            self.assertEqual(previous.status, "SUPERSEDED")
+            self.assertEqual(db.query(Execution).filter_by(strategy_id=strategy["id"]).count(), 1)
 
 
 if __name__ == "__main__":

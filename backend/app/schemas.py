@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class GoalCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
@@ -34,6 +34,73 @@ class ExecutionRead(BaseModel):
     strategy_id: int
     status: str
     result_summary: str | None
+    created_at: datetime
+
+
+class ContentDraftCreate(BaseModel):
+    """Platform-owned content draft. Provider credentials never appear here."""
+
+    channel: Literal["instagram"] = "instagram"
+    caption: str = Field(min_length=1, max_length=2_200)
+    hashtags: list[str] = Field(default_factory=list, max_length=30)
+    image_requirements: list[str] = Field(default_factory=list, max_length=12)
+    image_urls: list[str] = Field(default_factory=list, max_length=10)
+    carousel: bool = False
+    scheduled_at: datetime | None = None
+
+    @field_validator("hashtags")
+    @classmethod
+    def normalize_hashtags(cls, values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for value in values:
+            tag = value.strip().lstrip("#").replace(" ", "")
+            if not tag or len(tag) > 100:
+                raise ValueError("Each hashtag must contain 1 to 100 non-space characters")
+            if tag not in cleaned:
+                cleaned.append(tag)
+        return cleaned
+
+    @field_validator("image_requirements")
+    @classmethod
+    def clean_image_requirements(cls, values: list[str]) -> list[str]:
+        cleaned = [value.strip() for value in values if value.strip()]
+        if any(len(value) > 500 for value in cleaned):
+            raise ValueError("An image requirement must not exceed 500 characters")
+        return cleaned
+
+    @field_validator("image_urls")
+    @classmethod
+    def validate_image_urls(cls, values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for value in values:
+            url = value.strip()
+            if not url.startswith("https://"):
+                raise ValueError("Image URLs must use public HTTPS")
+            if url not in cleaned:
+                cleaned.append(url)
+        return cleaned
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def require_timezone_for_schedule(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("A scheduled time must include a timezone")
+        return value
+
+
+class ContentDraftRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    workspace_id: int
+    execution_id: int
+    tool: str
+    operation: str
+    status: str
+    draft_version: int
+    content_hash: str
+    payload: dict
+    idempotency_key: str
+    external_id: str | None
     created_at: datetime
 
 

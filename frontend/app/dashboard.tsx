@@ -7,14 +7,48 @@ const labels = {
   RUNNING: "執行中",
   COMPLETED: "已完成",
   FAILED: "執行失敗",
+  DRAFT: "草稿",
+  SCHEDULED: "已排程",
+  SUPERSEDED: "已由新版取代",
 };
 const colors = {
   PENDING: "bg-amber-100 text-amber-800",
   RUNNING: "bg-blue-100 text-maker-blue",
   COMPLETED: "bg-emerald-100 text-emerald-800",
   FAILED: "bg-red-100 text-red-800",
+  DRAFT: "bg-stone-100 text-stone-700",
+  SCHEDULED: "bg-violet-100 text-violet-800",
+  SUPERSEDED: "bg-stone-100 text-stone-500",
 };
 const blank = { goal: "", context: "", channel: "instagram" };
+const blankDraft = {
+  caption: "",
+  hashtags: "",
+  imageRequirement: "",
+  imageUrls: "",
+  scheduledAt: "",
+};
+
+type Strategy = {
+  id: number;
+  goal_id: number;
+  version: number;
+  content: string;
+  rationale: string | null;
+};
+
+type ContentDraft = {
+  id: number;
+  status: string;
+  draft_version: number;
+  payload: {
+    caption?: string;
+    hashtags?: string[];
+    image_requirements?: string[];
+    image_urls?: string[];
+    scheduled_at?: string | null;
+  };
+};
 
 function Pill({ status }) {
   return (
@@ -40,6 +74,12 @@ export default function Dashboard() {
   const [base, setBase] = useState(fallback);
   const [key, setKey] = useState("");
   const [runs, setRuns] = useState([]);
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [drafts, setDrafts] = useState<ContentDraft[]>([]);
+  const [selectedStrategy, setSelectedStrategy] = useState<number | null>(null);
+  const [draftForm, setDraftForm] = useState(blankDraft);
+  const [editingDraft, setEditingDraft] = useState<ContentDraft | null>(null);
+  const [draftSaving, setDraftSaving] = useState(false);
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState(blank);
   const [showForm, setShowForm] = useState(true);
@@ -64,8 +104,13 @@ export default function Dashboard() {
     return body;
   };
   const loadHistory = async () => {
-    const values = await call("/agent/runs");
+    const [values, strategyValues] = await Promise.all([
+      call("/agent/runs"),
+      call("/strategies"),
+    ]);
     setRuns(values);
+    setStrategies(strategyValues);
+    setSelectedStrategy((selected) => selected ?? strategyValues[0]?.id ?? null);
     setConnection(true);
   };
   useEffect(() => {
@@ -99,6 +144,15 @@ export default function Dashboard() {
     }, 2000);
     return () => clearInterval(timer);
   }, [runs, key, base]);
+  useEffect(() => {
+    if (!key || !selectedStrategy) {
+      setDrafts([]);
+      return;
+    }
+    call(`/strategies/${selectedStrategy}/content-drafts`)
+      .then(setDrafts)
+      .catch(() => setDrafts([]));
+  }, [selectedStrategy, key, base]);
   useEffect(() => {
     const run = runs.find((item) => item.run_id === selected);
     if (
@@ -145,6 +199,67 @@ export default function Dashboard() {
     } catch (cause) {
       setError(cause.message);
     }
+  }
+  async function createDraft(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedStrategy) return setError("請先選擇一筆 Strategy。");
+    if (!draftForm.caption.trim()) return setError("請填寫貼文文案。");
+    setDraftSaving(true);
+    setError("");
+    try {
+      const path = editingDraft
+        ? `/content-drafts/${editingDraft.id}/versions`
+        : `/strategies/${selectedStrategy}/content-drafts`;
+      const draft = await call(path, {
+        method: "POST",
+        body: JSON.stringify({
+          channel: "instagram",
+          caption: draftForm.caption.trim(),
+          hashtags: draftForm.hashtags.split(/[\s,，]+/).filter(Boolean),
+          image_requirements: draftForm.imageRequirement
+            .split("\n")
+            .filter((value) => value.trim()),
+          image_urls: draftForm.imageUrls
+            .split("\n")
+            .filter((value) => value.trim()),
+          scheduled_at: draftForm.scheduledAt
+            ? new Date(draftForm.scheduledAt).toISOString()
+            : null,
+        }),
+      });
+      if (editingDraft) {
+        setDrafts((all) => [
+          draft,
+          ...all.map((item) =>
+            item.id === editingDraft.id ? { ...item, status: "SUPERSEDED" } : item,
+          ),
+        ]);
+      } else {
+        setDrafts((all) => [draft, ...all.filter((item) => item.id !== draft.id)]);
+      }
+      setDraftForm(blankDraft);
+      setEditingDraft(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "無法建立內容草稿。");
+    } finally {
+      setDraftSaving(false);
+    }
+  }
+  function beginRevision(draft: ContentDraft) {
+    const scheduledAt = draft.payload.scheduled_at
+      ? new Date(new Date(draft.payload.scheduled_at).getTime() - new Date().getTimezoneOffset() * 60_000)
+          .toISOString()
+          .slice(0, 16)
+      : "";
+    setEditingDraft(draft);
+    setDraftForm({
+      caption: draft.payload.caption || "",
+      hashtags: (draft.payload.hashtags || []).join(", "),
+      imageRequirement: (draft.payload.image_requirements || []).join("\n"),
+      imageUrls: (draft.payload.image_urls || []).join("\n"),
+      scheduledAt,
+    });
+    document.getElementById("draft-form")?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
   const current = runs.find((run) => run.run_id === selected);
   return (
@@ -321,6 +436,21 @@ export default function Dashboard() {
                     "、",
                   )}
                 />
+                {current.output_payload.strategy_id && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedStrategy(current.output_payload.strategy_id);
+                      document.getElementById("content-drafts")?.scrollIntoView({
+                        behavior: "smooth",
+                        block: "start",
+                      });
+                    }}
+                    className="rounded-xl border border-[#89a9cc] bg-[#edf3f8] p-4 text-left font-semibold text-maker-blue transition hover:bg-[#e1edf8]"
+                  >
+                    使用此 Strategy 建立內容草稿
+                  </button>
+                )}
               </div>
             ) : (
               <p className="text-maker-muted">正在等待 worker 處理…</p>
@@ -329,6 +459,146 @@ export default function Dashboard() {
         ) : (
           <p className="py-10 text-center text-maker-muted">
             從歷史紀錄選擇一筆工作查看結果。
+          </p>
+        )}
+      </section>
+      <section
+        id="content-drafts"
+        className="mt-5 scroll-mt-5 rounded-2xl border border-maker-line bg-maker-paper p-6 shadow-panel"
+      >
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <p className="m-0 font-mono text-xs font-semibold tracking-[.12em] text-maker-blue">
+              CONTENT DRAFT
+            </p>
+            <h2 className="mt-1 text-xl">Instagram 內容草稿與排程</h2>
+            <p className="mb-0 text-sm text-maker-muted">
+              草稿會保存版本與排程；尚不會發布到 Instagram。
+            </p>
+          </div>
+          <label className="min-w-56 text-sm font-semibold">
+            選擇 Strategy
+            <select
+              className="input mt-1.5"
+              value={selectedStrategy ?? ""}
+              onChange={(event) =>
+                setSelectedStrategy(event.target.value ? Number(event.target.value) : null)
+              }
+            >
+              {!strategies.length && <option value="">尚無可用 Strategy</option>}
+              {strategies.map((strategy) => (
+                <option key={strategy.id} value={strategy.id}>
+                  #{strategy.id} · Goal {strategy.goal_id} · v{strategy.version}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {selectedStrategy ? (
+          <div className="mt-6 grid gap-6 lg:grid-cols-[1.05fr_.95fr]">
+            <form id="draft-form" onSubmit={createDraft} className="space-y-4 rounded-xl border border-maker-line p-5">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="m-0 text-lg">{editingDraft ? `修改草稿 v${editingDraft.draft_version}` : "新增內容草稿"}</h3>
+                {editingDraft && (
+                  <button
+                    type="button"
+                    onClick={() => { setEditingDraft(null); setDraftForm(blankDraft); }}
+                    className="rounded-lg bg-stone-100 px-3 py-2 text-sm font-semibold text-maker-blue"
+                  >
+                    取消修改
+                  </button>
+                )}
+              </div>
+              <Field label="Instagram 文案 *">
+                <textarea
+                  className="input min-h-32 resize-y"
+                  value={draftForm.caption}
+                  onChange={(event) => setDraftForm({ ...draftForm, caption: event.target.value })}
+                  placeholder="輸入貼文主文，不必先加上 hashtag。"
+                />
+              </Field>
+              <Field label="Hashtags">
+                <input
+                  className="input"
+                  value={draftForm.hashtags}
+                  onChange={(event) => setDraftForm({ ...draftForm, hashtags: event.target.value })}
+                  placeholder="NTUMaker, Arduino, 創客"
+                />
+              </Field>
+              <Field label="素材需求（每行一項）">
+                <textarea
+                  className="input min-h-24 resize-y"
+                  value={draftForm.imageRequirement}
+                  onChange={(event) => setDraftForm({ ...draftForm, imageRequirement: event.target.value })}
+                  placeholder="封面：1080×1080，學生展示實作成品"
+                />
+              </Field>
+              <Field label="公開圖片網址（每行一個，可稍後補）">
+                <textarea
+                  className="input min-h-20 resize-y"
+                  value={draftForm.imageUrls}
+                  onChange={(event) => setDraftForm({ ...draftForm, imageUrls: event.target.value })}
+                  placeholder="https://example.com/image.jpg"
+                />
+              </Field>
+              <Field label="預計發布時間（選填）">
+                <input
+                  type="datetime-local"
+                  className="input"
+                  value={draftForm.scheduledAt}
+                  onChange={(event) => setDraftForm({ ...draftForm, scheduledAt: event.target.value })}
+                />
+              </Field>
+              <button
+                disabled={draftSaving}
+                className="w-full rounded-xl bg-maker-blue px-4 py-3 font-semibold text-white transition hover:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {draftSaving ? "儲存草稿中…" : editingDraft ? "建立新草稿版本" : "儲存內容草稿"}
+              </button>
+            </form>
+            <div className="rounded-xl border border-maker-line p-5">
+              <h3 className="m-0 text-lg">此 Strategy 的草稿版本</h3>
+              {drafts.length ? (
+                <ol className="mt-4 grid list-none gap-3 p-0">
+                  {drafts.map((draft) => (
+                    <li key={draft.id} className="rounded-xl border border-maker-line p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <strong>草稿 v{draft.draft_version}</strong>
+                        <Pill status={draft.status} />
+                      </div>
+                      <p className="mb-2 mt-3 whitespace-pre-wrap leading-6">
+                        {draft.payload.caption || "尚無文案"}
+                      </p>
+                      {!!draft.payload.hashtags?.length && (
+                        <p className="m-0 text-sm text-maker-blue">
+                          {draft.payload.hashtags.map((tag) => `#${tag}`).join(" ")}
+                        </p>
+                      )}
+                      {draft.payload.scheduled_at && (
+                        <p className="mb-0 mt-3 text-sm text-maker-muted">
+                          預計發布：{new Date(draft.payload.scheduled_at).toLocaleString("zh-TW")}
+                        </p>
+                      )}
+                      {!['SUPERSEDED', 'EXECUTING', 'SUCCEEDED'].includes(draft.status) && (
+                        <button
+                          type="button"
+                          onClick={() => beginRevision(draft)}
+                          className="mt-4 rounded-lg bg-stone-100 px-3 py-2 text-sm font-semibold text-maker-blue transition hover:bg-stone-200"
+                        >
+                          建立修改版本
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="py-12 text-center text-maker-muted">尚未建立內容草稿。</p>
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="mt-8 rounded-xl bg-stone-50 p-6 text-center text-maker-muted">
+            Agent 產生並保存 Strategy 後，即可在這裡建立內容草稿。
           </p>
         )}
       </section>

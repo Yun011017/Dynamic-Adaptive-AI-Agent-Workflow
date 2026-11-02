@@ -115,7 +115,7 @@ class ExecutionAction(TenantRow, Base):
         ForeignKeyConstraint(["workspace_id", "execution_id"], ["executions.workspace_id", "executions.id"]),
         UniqueConstraint("workspace_id", "idempotency_key"), UniqueConstraint("workspace_id", "id"),
         CheckConstraint("draft_version > 0", name="ck_actions_version"),
-        CheckConstraint("status IN ('DRAFT','PENDING_REVIEW','APPROVED','REJECTED','EXPIRED','EXECUTING','SUCCEEDED','FAILED','TIMEOUT','VERIFYING','MANUAL_REVIEW')", name="ck_actions_status"),
+        CheckConstraint("status IN ('DRAFT','SCHEDULED','PENDING_REVIEW','APPROVED','REJECTED','EXPIRED','EXECUTING','SUCCEEDED','FAILED','TIMEOUT','VERIFYING','MANUAL_REVIEW','SUPERSEDED')", name="ck_actions_status"),
     )
 
 

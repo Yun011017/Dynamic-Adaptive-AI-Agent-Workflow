@@ -12,9 +12,10 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import engine, get_db
-from .models import AgentRun, Execution, Goal, Strategy, Workspace
+from .content_drafts import create_content_draft, create_content_draft_version
+from .models import AgentRun, Execution, ExecutionAction, Goal, Strategy, Workspace
 from .retry import read_with_retry
-from .schemas import AgentRunCreate, AgentRunRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead
+from .schemas import AgentRunCreate, AgentRunRead, ContentDraftCreate, ContentDraftRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead
 
 app = FastAPI(title="Dynamic Adaptive AI Agent Workflow", version="0.2.0")
 app.add_middleware(
@@ -121,6 +122,21 @@ def create_strategy(goal_id: int, data: StrategyCreate, db: DB, tenant: Tenant):
     return row
 
 
+@app.get("/strategies", response_model=list[StrategyRead])
+def list_strategies(db: DB, tenant: Tenant, limit: int = 50):
+    if not 1 <= limit <= 100:
+        raise HTTPException(422, "Invalid limit")
+    return read_with_retry(
+        lambda: db.scalars(
+            select(Strategy)
+            .where(Strategy.workspace_id == tenant)
+            .order_by(Strategy.created_at.desc(), Strategy.id.desc())
+            .limit(limit)
+        ).all(),
+        reset=db.rollback,
+    )
+
+
 @app.post("/strategies/{strategy_id}/executions", response_model=ExecutionRead, status_code=201)
 def create_execution_record(strategy_id: int, db: DB, tenant: Tenant):
     # Record only: no Agent scheduling and no external side effects.
@@ -135,6 +151,49 @@ def create_execution_record(strategy_id: int, db: DB, tenant: Tenant):
 @app.get("/executions/{execution_id}", response_model=ExecutionRead)
 def get_execution(execution_id: int, db: DB, tenant: Tenant):
     return scoped(db, Execution, execution_id, tenant)
+
+
+@app.post("/strategies/{strategy_id}/content-drafts", response_model=ContentDraftRead, status_code=201)
+def create_draft(strategy_id: int, data: ContentDraftCreate, db: DB, tenant: Tenant):
+    strategy = scoped(db, Strategy, strategy_id, tenant)
+    row, _created = create_content_draft(db, strategy=strategy, data=data)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.get("/strategies/{strategy_id}/content-drafts", response_model=list[ContentDraftRead])
+def list_drafts(strategy_id: int, db: DB, tenant: Tenant, limit: int = 50):
+    if not 1 <= limit <= 100:
+        raise HTTPException(422, "Invalid limit")
+    scoped(db, Strategy, strategy_id, tenant)
+    return read_with_retry(
+        lambda: db.scalars(
+            select(ExecutionAction)
+            .join(Execution, Execution.id == ExecutionAction.execution_id)
+            .where(
+                ExecutionAction.workspace_id == tenant,
+                Execution.workspace_id == tenant,
+                Execution.strategy_id == strategy_id,
+            )
+            .order_by(ExecutionAction.created_at.desc(), ExecutionAction.id.desc())
+            .limit(limit)
+        ).all(),
+        reset=db.rollback,
+    )
+
+
+@app.post("/content-drafts/{action_id}/versions", response_model=ContentDraftRead, status_code=201)
+def revise_draft(action_id: int, data: ContentDraftCreate, db: DB, tenant: Tenant):
+    previous = scoped(db, ExecutionAction, action_id, tenant)
+    if previous.status in {"EXECUTING", "SUCCEEDED"}:
+        raise HTTPException(409, "A published or executing draft cannot be revised")
+    execution = scoped(db, Execution, previous.execution_id, tenant)
+    strategy = scoped(db, Strategy, execution.strategy_id, tenant)
+    row = create_content_draft_version(db, previous=previous, strategy=strategy, data=data)
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 @app.post("/agent/runs", response_model=AgentRunRead, status_code=202)
