@@ -11,11 +11,12 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .config import settings
+from .content_draft_jobs import queue_content_draft_run
 from .db import engine, get_db
 from .content_drafts import create_content_draft, create_content_draft_version
 from .models import AgentRun, Execution, ExecutionAction, Goal, Strategy, Workspace
 from .retry import read_with_retry
-from .schemas import AgentRunCreate, AgentRunRead, ContentDraftCreate, ContentDraftRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead
+from .schemas import AgentRunCreate, AgentRunRead, ContentDraftCreate, ContentDraftGenerateRequest, ContentDraftRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead
 
 app = FastAPI(title="Dynamic Adaptive AI Agent Workflow", version="0.2.0")
 app.add_middleware(
@@ -181,6 +182,24 @@ def list_drafts(strategy_id: int, db: DB, tenant: Tenant, limit: int = 50):
         ).all(),
         reset=db.rollback,
     )
+
+
+@app.post("/strategies/{strategy_id}/content-draft-runs", response_model=AgentRunRead, status_code=202)
+def queue_content_draft(strategy_id: int, data: ContentDraftGenerateRequest, db: DB, tenant: Tenant):
+    """Queue model work; the background worker creates the persisted content draft."""
+    strategy = scoped(db, Strategy, strategy_id, tenant)
+    row = queue_content_draft_run(
+        db,
+        workspace_id=tenant,
+        strategy_id=strategy.id,
+        provider=settings.agent_provider,
+        model_name=settings.agent_model,
+        content_format=data.content_format,
+        scheduled_at=data.scheduled_at,
+    )
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 @app.post("/content-drafts/{action_id}/versions", response_model=ContentDraftRead, status_code=201)

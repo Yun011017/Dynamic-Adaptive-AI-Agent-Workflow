@@ -6,7 +6,7 @@ import hashlib
 import json
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .models import Execution, ExecutionAction, Strategy
@@ -19,13 +19,16 @@ def render_caption(caption: str, hashtags: list[str]) -> str:
     return f"{caption.strip()}\n\n{tag_line}".rstrip()
 
 
-def _payload(strategy: Strategy, data: ContentDraftCreate) -> dict:
+def _payload(
+    strategy: Strategy, data: ContentDraftCreate, *, proposal_version: int | None = None
+) -> dict:
     scheduled_at = data.scheduled_at.isoformat() if data.scheduled_at else None
     image_urls = list(data.image_urls)
-    return {
+    payload = {
         "strategy_id": strategy.id,
         "strategy_version": strategy.version,
         "channel": data.channel,
+        "title": data.title.strip(),
         "caption": data.caption.strip(),
         "hashtags": list(data.hashtags),
         "image_requirements": list(data.image_requirements),
@@ -40,6 +43,9 @@ def _payload(strategy: Strategy, data: ContentDraftCreate) -> dict:
             else None
         ),
     }
+    if proposal_version is not None:
+        payload["proposal_version"] = proposal_version
+    return payload
 
 
 def _hash(value: dict) -> str:
@@ -54,9 +60,8 @@ def create_content_draft(
     data: ContentDraftCreate,
 ) -> tuple[ExecutionAction, bool]:
     """Create one content action, or return the same action for an identical request."""
-    payload = _payload(strategy, data)
-    content_hash = _hash({key: value for key, value in payload.items() if key != "scheduled_at"})
-    idempotency_key = _hash(payload)
+    identity_payload = _payload(strategy, data)
+    idempotency_key = _hash(identity_payload)
     existing = db.scalar(
         select(ExecutionAction).where(
             ExecutionAction.workspace_id == strategy.workspace_id,
@@ -65,6 +70,29 @@ def create_content_draft(
     )
     if existing:
         return existing, False
+
+    proposal_version = (
+        db.scalar(
+            select(func.count())
+            .select_from(ExecutionAction)
+            .join(Execution, Execution.id == ExecutionAction.execution_id)
+            .where(
+                ExecutionAction.workspace_id == strategy.workspace_id,
+                Execution.workspace_id == strategy.workspace_id,
+                Execution.strategy_id == strategy.id,
+                ExecutionAction.draft_version == 1,
+            )
+        )
+        + 1
+    )
+    payload = _payload(strategy, data, proposal_version=proposal_version)
+    content_hash = _hash(
+        {
+            key: value
+            for key, value in payload.items()
+            if key not in {"scheduled_at", "proposal_version"}
+        }
+    )
 
     execution = Execution(
         workspace_id=strategy.workspace_id,
@@ -97,8 +125,15 @@ def create_content_draft_version(
     data: ContentDraftCreate,
 ) -> ExecutionAction:
     """Keep the previous immutable draft and replace it with the next version."""
-    payload = _payload(strategy, data)
-    content_hash = _hash({key: value for key, value in payload.items() if key != "scheduled_at"})
+    proposal_version = previous.payload.get("proposal_version", 1)
+    payload = _payload(strategy, data, proposal_version=proposal_version)
+    content_hash = _hash(
+        {
+            key: value
+            for key, value in payload.items()
+            if key not in {"scheduled_at", "proposal_version"}
+        }
+    )
     version = previous.draft_version + 1
     # Include the version because an intentional edit may restore earlier text.
     idempotency_key = _hash({"execution_id": previous.execution_id, "version": version, **payload})

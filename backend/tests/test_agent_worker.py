@@ -3,6 +3,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from app.schemas import ContentDraftCreate
+
 
 class AgentWorkerTests(unittest.TestCase):
     def setUp(self):
@@ -81,3 +83,49 @@ class AgentWorkerTests(unittest.TestCase):
             with self.assertRaises(FormSyncError):
                 sync_once(workspace_id=999)
             save.assert_not_called()
+
+    def test_content_draft_job_uses_persisted_strategy_and_never_syncs_forms(self):
+        row = SimpleNamespace(
+            workspace_id=7,
+            agent_provider="local",
+            agent_model="deterministic-langgraph",
+            input_payload={"job_type": "CONTENT_DRAFT", "strategy_id": 12, "channel": "instagram", "scheduled_at": None},
+        )
+        strategy = SimpleNamespace(id=12, version=1, goal_id=3, workspace_id=7)
+        goal = SimpleNamespace(id=3, workspace_id=7)
+        action = SimpleNamespace(id=44, payload={"carousel": True, "caption": "草稿"})
+        db = MagicMock()
+        db.scalar.side_effect = [strategy, goal]
+        with patch.object(self.worker, "generate_content_draft", return_value=ContentDraftCreate(
+            caption="草稿", carousel=True, image_requirements=["封面", "作品照"]
+        )) as generate, patch.object(self.worker, "create_content_draft", return_value=(action, True)) as save:
+            output = self.worker.create_generated_content_draft(db, row)
+        generate.assert_called_once()
+        save.assert_called_once()
+        self.assertEqual(output["content_draft_action_id"], 44)
+        self.assertTrue(output["content_draft"]["carousel"])
+
+    def test_strategy_result_automatically_queues_content_draft_work(self):
+        row = SimpleNamespace(
+            id=1, run_id="strategy-run", workspace_id=7, agent_provider="local",
+            agent_model="deterministic-langgraph", input_payload={"goal": "test"},
+            attempts=1, output_payload=None, error_code=None, status="RUNNING",
+        )
+        queued = SimpleNamespace(run_id="content-run")
+        with patch.object(self.worker, "SessionLocal") as session, \
+             patch.object(self.worker, "claim_next_run", return_value=row), \
+             patch.object(self.worker, "checkpoint"), \
+             patch.object(self.worker, "sync_once", return_value={"read": 0, "inserted": 0, "skipped": 0}), \
+             patch.object(self.worker, "run_agent", return_value={"strategy_id": 12, "reason": "strategy"}), \
+             patch.object(self.worker, "queue_content_draft_run", return_value=queued) as queue:
+            session.return_value.__enter__.return_value = MagicMock()
+            self.assertEqual(self.worker.process_one_run(), "strategy-run")
+        self.assertEqual(row.status, "COMPLETED")
+        self.assertEqual(row.output_payload["content_draft_run_id"], "content-run")
+        queue.assert_called_once_with(
+            session.return_value.__enter__.return_value,
+            workspace_id=7,
+            strategy_id=12,
+            provider="local",
+            model_name="deterministic-langgraph",
+        )

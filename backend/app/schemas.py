@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 class GoalCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
@@ -41,6 +41,7 @@ class ContentDraftCreate(BaseModel):
     """Platform-owned content draft. Provider credentials never appear here."""
 
     channel: Literal["instagram"] = "instagram"
+    title: str = Field(default="未命名內容提案", min_length=1, max_length=160)
     caption: str = Field(min_length=1, max_length=2_200)
     hashtags: list[str] = Field(default_factory=list, max_length=30)
     image_requirements: list[str] = Field(default_factory=list, max_length=12)
@@ -87,6 +88,14 @@ class ContentDraftCreate(BaseModel):
             raise ValueError("A scheduled time must include a timezone")
         return value
 
+    @model_validator(mode="after")
+    def validate_carousel_assets(self):
+        if self.carousel and len(self.image_requirements) < 2:
+            raise ValueError("A carousel needs at least two image requirements")
+        if self.carousel and self.image_urls and len(self.image_urls) < 2:
+            raise ValueError("A carousel needs at least two public image URLs when URLs are supplied")
+        return self
+
 
 class ContentDraftRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -102,6 +111,21 @@ class ContentDraftRead(BaseModel):
     idempotency_key: str
     external_id: str | None
     created_at: datetime
+
+
+class ContentDraftGenerateRequest(BaseModel):
+    """Request a worker-owned draft generation; the HTTP request never invokes a model."""
+
+    channel: Literal["instagram"] = "instagram"
+    content_format: Literal["carousel", "single"] = "carousel"
+    scheduled_at: datetime | None = None
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def require_timezone_for_schedule(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("A scheduled time must include a timezone")
+        return value
 
 
 class AgentRunCreate(BaseModel):

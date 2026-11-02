@@ -11,10 +11,14 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .agent_runner import run_agent
+from .content_drafts import create_content_draft
+from .content_draft_jobs import queue_content_draft_run
+from .content_generator import generate_content_draft
 from .form_sync import sync_once
 from .config import settings
 from .db import SessionLocal
-from .models import AgentRun, AgentRunCheckpoint
+from .models import AgentRun, AgentRunCheckpoint, Goal, Strategy
+from .schemas import ContentDraftGenerateRequest
 
 
 def claim_next_run(db: Session) -> AgentRun | None:
@@ -75,6 +79,39 @@ def refresh_form_data(workspace_id: int) -> dict:
         }
 
 
+def create_generated_content_draft(db: Session, row: AgentRun) -> dict:
+    """Create a DRAFT/SCHEDULED action from a persisted strategy without HTTP model work."""
+    payload = row.input_payload
+    request = ContentDraftGenerateRequest.model_validate(payload)
+    strategy = db.scalar(
+        select(Strategy).where(Strategy.id == payload["strategy_id"], Strategy.workspace_id == row.workspace_id)
+    )
+    if strategy is None:
+        raise RuntimeError("Strategy is unavailable for this workspace")
+    goal = db.scalar(
+        select(Goal).where(Goal.id == strategy.goal_id, Goal.workspace_id == row.workspace_id)
+    )
+    if goal is None:
+        raise RuntimeError("Goal is unavailable for this workspace")
+    draft = generate_content_draft(
+        goal=goal,
+        strategy=strategy,
+        provider=row.agent_provider,
+        model_name=row.agent_model,
+        content_format=request.content_format,
+        scheduled_at=request.scheduled_at,
+    )
+    action, created = create_content_draft(db, strategy=strategy, data=draft)
+    return {
+        "job_type": "CONTENT_DRAFT",
+        "strategy_id": strategy.id,
+        "strategy_version": strategy.version,
+        "content_draft_action_id": action.id,
+        "content_draft_created": created,
+        "content_draft": action.payload,
+    }
+
+
 def process_one_run() -> str | None:
     """Process one queued run and return its run_id, or None when the queue is empty."""
     with SessionLocal() as db:
@@ -84,24 +121,41 @@ def process_one_run() -> str | None:
         payload = row.input_payload
         workspace_id, provider, model_name = row.workspace_id, row.agent_provider, row.agent_model
         checkpoint(db, row, "RUNNING", {"input": payload, "attempt": row.attempts})
-        # checkpoint committed the claim; no main DB transaction is held during fetching.
-        form_sync = refresh_form_data(workspace_id)
         try:
-            output = run_agent(
-                workspace_id=workspace_id,
-                goal=payload["goal"],
-                context=payload.get("context", ""),
-                constraints=payload.get("constraints", {}),
-                provider=provider,
-                model_name=model_name,
-            )
-            form_sync["fallback_used"] = (
-                form_sync["status"] == "failed" and output.get("form_summary", {}).get("response_count", 0) > 0
-            )
-            output["form_sync"] = form_sync
-            if form_sync["status"] == "failed":
-                note = "表單同步失敗，本次沿用 Neon 已保存資料。" if form_sync["fallback_used"] else "表單同步失敗，資料庫沒有可用回覆，本次資料不足。"
-                output["reason"] = note + output.get("reason", "")
+            if payload.get("job_type") == "CONTENT_DRAFT":
+                output = create_generated_content_draft(db, row)
+                form_sync = None
+            else:
+                # The analysis job refreshes before reading its bounded Neon summary.
+                form_sync = refresh_form_data(workspace_id)
+                output = run_agent(
+                    workspace_id=workspace_id,
+                    goal=payload["goal"],
+                    context=payload.get("context", ""),
+                    constraints=payload.get("constraints", {}),
+                    provider=provider,
+                    model_name=model_name,
+                )
+                form_sync["fallback_used"] = (
+                    form_sync["status"] == "failed" and output.get("form_summary", {}).get("response_count", 0) > 0
+                )
+                output["form_sync"] = form_sync
+                if form_sync["status"] == "failed":
+                    note = "表單同步失敗，本次沿用 Neon 已保存資料。" if form_sync["fallback_used"] else "表單同步失敗，資料庫沒有可用回覆，本次資料不足。"
+                    output["reason"] = note + output.get("reason", "")
+                # When the Strategy producer persists its formal record and
+                # exposes strategy_id, automatically queue the next bounded
+                # job. The new job creates the carousel draft separately.
+                strategy_id = output.get("strategy_id")
+                if isinstance(strategy_id, int) and not isinstance(strategy_id, bool):
+                    content_run = queue_content_draft_run(
+                        db,
+                        workspace_id=workspace_id,
+                        strategy_id=strategy_id,
+                        provider=provider,
+                        model_name=model_name,
+                    )
+                    output["content_draft_run_id"] = content_run.run_id
             row.output_payload = output
             row.status = "COMPLETED"
         except Exception:
