@@ -184,6 +184,25 @@ def list_drafts(strategy_id: int, db: DB, tenant: Tenant, limit: int = 50):
     )
 
 
+@app.get("/content-drafts/scheduled", response_model=list[ContentDraftRead])
+def list_scheduled_drafts(db: DB, tenant: Tenant, limit: int = 100):
+    """Return one workspace-wide queue of explicitly scheduled content drafts."""
+    if not 1 <= limit <= 100:
+        raise HTTPException(422, "Invalid limit")
+    return read_with_retry(
+        lambda: db.scalars(
+            select(ExecutionAction)
+            .where(
+                ExecutionAction.workspace_id == tenant,
+                ExecutionAction.status == "SCHEDULED",
+            )
+            .order_by(ExecutionAction.created_at.desc(), ExecutionAction.id.desc())
+            .limit(limit)
+        ).all(),
+        reset=db.rollback,
+    )
+
+
 @app.post("/strategies/{strategy_id}/content-draft-runs", response_model=AgentRunRead, status_code=202)
 def queue_content_draft(strategy_id: int, data: ContentDraftGenerateRequest, db: DB, tenant: Tenant):
     """Queue model work; the background worker creates the persisted content draft."""
@@ -196,6 +215,7 @@ def queue_content_draft(strategy_id: int, data: ContentDraftGenerateRequest, db:
         model_name=settings.agent_model,
         content_format=data.content_format,
         scheduled_at=data.scheduled_at,
+        schedule_requested=data.schedule_requested,
     )
     db.commit()
     db.refresh(row)

@@ -41,7 +41,8 @@ def _json_object(text: str) -> dict:
 
 
 def _local_draft(
-    *, goal: Goal, strategy: Strategy, content_format: str, scheduled_at: datetime | None
+    *, goal: Goal, strategy: Strategy, content_format: str, scheduled_at: datetime | None,
+    schedule_requested: bool = False,
 ) -> ContentDraftCreate:
     direction = strategy.content.strip()
     excerpt = direction[:1_600] if direction else "以活動特色與參與者可獲得的成果為主軸。"
@@ -63,6 +64,7 @@ def _local_draft(
         image_urls=[],
         carousel=content_format == "carousel",
         scheduled_at=scheduled_at,
+        schedule_requested=schedule_requested,
     )
 
 
@@ -74,6 +76,7 @@ def generate_content_draft(
     model_name: str,
     content_format: str = "carousel",
     scheduled_at: datetime | None = None,
+    schedule_requested: bool = False,
 ) -> ContentDraftCreate:
     """Return validated platform data; image URLs are never invented by a model."""
     if provider == "local":
@@ -82,6 +85,7 @@ def generate_content_draft(
             strategy=strategy,
             content_format=content_format,
             scheduled_at=scheduled_at,
+            schedule_requested=schedule_requested,
         )
 
     model = _model_for(provider, model_name)
@@ -118,6 +122,7 @@ def generate_content_draft(
     )
     generated["carousel"] = content_format == "carousel"
     generated["scheduled_at"] = scheduled_at
+    generated["schedule_requested"] = schedule_requested
     try:
         return ContentDraftCreate.model_validate(generated)
     except Exception as exc:

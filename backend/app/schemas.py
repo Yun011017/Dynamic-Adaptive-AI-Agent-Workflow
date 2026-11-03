@@ -48,6 +48,7 @@ class ContentDraftCreate(BaseModel):
     image_urls: list[str] = Field(default_factory=list, max_length=10)
     carousel: bool = False
     scheduled_at: datetime | None = None
+    schedule_requested: bool = False
 
     @field_validator("hashtags")
     @classmethod
@@ -92,6 +93,8 @@ class ContentDraftCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_carousel_assets(self):
+        if self.schedule_requested and self.scheduled_at is None:
+            raise ValueError("A scheduled draft needs a scheduled time")
         if self.carousel and len(self.image_requirements) < 2:
             raise ValueError("A carousel needs at least two image requirements")
         if self.carousel and self.image_urls and len(self.image_urls) < 2:
@@ -121,6 +124,7 @@ class ContentDraftGenerateRequest(BaseModel):
     channel: Literal["instagram"] = "instagram"
     content_format: Literal["carousel", "single"] = "carousel"
     scheduled_at: datetime | None = None
+    schedule_requested: bool = False
 
     @field_validator("scheduled_at")
     @classmethod
@@ -130,6 +134,12 @@ class ContentDraftGenerateRequest(BaseModel):
         if value is not None and value <= datetime.now(timezone.utc):
             raise ValueError("A scheduled time must be in the future")
         return value
+
+    @model_validator(mode="after")
+    def require_time_when_scheduling(self):
+        if self.schedule_requested and self.scheduled_at is None:
+            raise ValueError("A scheduled draft needs a scheduled time")
+        return self
 
 
 class AgentRunCreate(BaseModel):

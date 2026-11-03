@@ -100,6 +100,7 @@ def create_generated_content_draft(db: Session, row: AgentRun) -> dict:
         model_name=row.agent_model,
         content_format=request.content_format,
         scheduled_at=request.scheduled_at,
+        schedule_requested=request.schedule_requested,
     )
     action, created = create_content_draft(db, strategy=strategy, data=draft)
     return {

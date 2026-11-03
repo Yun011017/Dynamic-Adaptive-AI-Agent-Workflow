@@ -17,7 +17,7 @@ const colors = {
   COMPLETED: "bg-emerald-100 text-emerald-800",
   FAILED: "bg-red-100 text-red-800",
   DRAFT: "bg-stone-100 text-stone-700",
-  SCHEDULED: "bg-violet-100 text-violet-800",
+  SCHEDULED: "bg-orange-100 text-orange-900",
   SUPERSEDED: "bg-stone-100 text-stone-500",
 };
 const blank = { goal: "", context: "", channel: "instagram" };
@@ -28,6 +28,7 @@ const blankDraft = {
   imageRequirement: "",
   imageUrls: "",
   scheduledAt: "",
+  scheduleRequested: false,
   carousel: true,
 };
 
@@ -58,6 +59,8 @@ type ContentDraft = {
     image_urls?: string[];
     carousel?: boolean;
     scheduled_at?: string | null;
+    schedule_requested?: boolean;
+    strategy_id?: number;
     proposal_version?: number;
   };
 };
@@ -83,9 +86,7 @@ function Field({ label, children }) {
 function proposalVersion(draft: ContentDraft) {
   const major = draft.payload.proposal_version;
   if (!major) return `舊資料 v${draft.draft_version}`;
-  return draft.draft_version === 1
-    ? `v${major}`
-    : `v${major}.${draft.draft_version - 1}`;
+  return `v${major}.${draft.draft_version}`;
 }
 
 export default function Dashboard() {
@@ -97,6 +98,7 @@ export default function Dashboard() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [drafts, setDrafts] = useState<ContentDraft[]>([]);
+  const [scheduledDrafts, setScheduledDrafts] = useState<ContentDraft[]>([]);
   const [selectedStrategy, setSelectedStrategy] = useState<number | null>(null);
   const [draftForm, setDraftForm] = useState(blankDraft);
   const [editingDraft, setEditingDraft] = useState<ContentDraft | null>(null);
@@ -139,6 +141,13 @@ export default function Dashboard() {
     setSelectedStrategy((selected) => selected ?? strategyValues[0]?.id ?? null);
     setConnection(true);
   };
+  const loadScheduledDrafts = async () => {
+    if (!key) {
+      setScheduledDrafts([]);
+      return;
+    }
+    setScheduledDrafts(await call("/content-drafts/scheduled"));
+  };
   useEffect(() => {
     const savedBase = sessionStorage.getItem("agentApiBase"),
       savedKey = sessionStorage.getItem("agentApiKey");
@@ -179,6 +188,9 @@ export default function Dashboard() {
       .then(setDrafts)
       .catch(() => setDrafts([]));
   }, [selectedStrategy, key, base]);
+  useEffect(() => {
+    loadScheduledDrafts().catch(() => setScheduledDrafts([]));
+  }, [key, base]);
   useEffect(() => {
     if (!draftGenerationRun || !selectedStrategy) return;
     const run = runs.find((item) => item.run_id === draftGenerationRun);
@@ -252,11 +264,13 @@ export default function Dashboard() {
     }
     resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
-  async function createDraft(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function saveDraft(scheduleRequested = draftForm.scheduleRequested) {
     if (!selectedStrategy) return setError("請先選擇一筆 Strategy。");
     if (!draftForm.title.trim()) return setError("請填寫提案名稱。");
     if (!draftForm.caption.trim()) return setError("請填寫貼文文案。");
+    if (scheduleRequested && !draftForm.scheduledAt) {
+      return setError("建立排程前，請先設定預計發布時間。");
+    }
     setDraftSaving(true);
     setError("");
     try {
@@ -280,6 +294,7 @@ export default function Dashboard() {
           scheduled_at: draftForm.scheduledAt
             ? new Date(draftForm.scheduledAt).toISOString()
             : null,
+          schedule_requested: scheduleRequested,
         }),
       });
       if (editingDraft) {
@@ -289,11 +304,13 @@ export default function Dashboard() {
             item.id === editingDraft.id ? { ...item, status: "SUPERSEDED" } : item,
           ),
         ]);
+        setEditingDraft(draft);
+        setDraftForm((form) => ({ ...form, scheduleRequested }));
       } else {
         setDrafts((all) => [draft, ...all.filter((item) => item.id !== draft.id)]);
+        setDraftForm(blankDraft);
       }
-      setDraftForm(blankDraft);
-      setEditingDraft(null);
+      loadScheduledDrafts().catch(() => setScheduledDrafts([]));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "無法建立內容草稿。");
     } finally {
@@ -313,6 +330,7 @@ export default function Dashboard() {
           scheduled_at: draftForm.scheduledAt
             ? new Date(draftForm.scheduledAt).toISOString()
             : null,
+          schedule_requested: draftForm.scheduleRequested,
         }),
       });
       setRuns((all) => [run, ...all]);
@@ -323,8 +341,16 @@ export default function Dashboard() {
     }
   }
   function beginRevision(draft: ContentDraft) {
-    const scheduledAt = draft.payload.scheduled_at
-      ? new Date(new Date(draft.payload.scheduled_at).getTime() - new Date().getTimezoneOffset() * 60_000)
+    // A publishing plan belongs to the proposal across revisions. Older rows
+    // may predate that plan, so show the newest saved time rather than making
+    // it appear to disappear when the user only opens another version.
+    const scheduledSource = draft.payload.scheduled_at
+      ? draft
+      : drafts
+          .filter((item) => item.execution_id === draft.execution_id && item.payload.scheduled_at)
+          .sort((a, b) => b.draft_version - a.draft_version)[0];
+    const scheduledAt = scheduledSource?.payload.scheduled_at
+      ? new Date(new Date(scheduledSource.payload.scheduled_at).getTime() - new Date().getTimezoneOffset() * 60_000)
           .toISOString()
           .slice(0, 16)
       : "";
@@ -336,6 +362,7 @@ export default function Dashboard() {
       imageRequirement: (draft.payload.image_requirements || []).join("\n"),
       imageUrls: (draft.payload.image_urls || []).join("\n"),
       scheduledAt,
+      scheduleRequested: Boolean(draft.payload.schedule_requested),
       carousel: Boolean(draft.payload.carousel),
     });
     document.getElementById("draft-form")?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -355,6 +382,7 @@ export default function Dashboard() {
           image_urls: draft.payload.image_urls || [],
           carousel: Boolean(draft.payload.carousel),
           scheduled_at: null,
+          schedule_requested: false,
         }),
       });
       setDrafts((all) => [
@@ -363,16 +391,79 @@ export default function Dashboard() {
           item.id === draft.id ? { ...item, status: "SUPERSEDED" } : item,
         ),
       ]);
+      if (editingDraft?.id === draft.id) setEditingDraft(revised);
+      loadScheduledDrafts().catch(() => setScheduledDrafts([]));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "無法取消排程。");
     } finally {
       setScheduleSaving(null);
     }
   }
+  async function addToSchedule(draft: ContentDraft) {
+    if (!draft.payload.scheduled_at) return;
+    setScheduleSaving(draft.id);
+    setError("");
+    try {
+      const revised = await call(`/content-drafts/${draft.id}/versions`, {
+        method: "POST",
+        body: JSON.stringify({
+          channel: draft.payload.channel || "instagram",
+          title: draft.payload.title || "未命名內容提案",
+          caption: draft.payload.caption || "未命名內容",
+          hashtags: draft.payload.hashtags || [],
+          image_requirements: draft.payload.image_requirements || [],
+          image_urls: draft.payload.image_urls || [],
+          carousel: Boolean(draft.payload.carousel),
+          scheduled_at: draft.payload.scheduled_at,
+          schedule_requested: true,
+        }),
+      });
+      setDrafts((all) => [
+        revised,
+        ...all.map((item) =>
+          item.id === draft.id ? { ...item, status: "SUPERSEDED" } : item,
+        ),
+      ]);
+      if (editingDraft?.id === draft.id) setEditingDraft(revised);
+      loadScheduledDrafts().catch(() => setScheduledDrafts([]));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "無法加入排程。");
+    } finally {
+      setScheduleSaving(null);
+    }
+  }
+  function openScheduledDraft(draft: ContentDraft) {
+    const strategyId = draft.payload.strategy_id;
+    if (typeof strategyId === "number") setSelectedStrategy(strategyId);
+    beginRevision(draft);
+  }
   const current = runs.find((run) => run.run_id === selected);
   const strategyRuns = runs.filter(
     (run) => run.input_payload.job_type !== "CONTENT_DRAFT",
   );
+  const activeDrafts = drafts.filter((draft) => !["SUPERSEDED", "EXECUTING", "SUCCEEDED"].includes(draft.status));
+  const revisionHistory = editingDraft
+    ? drafts
+        .filter((draft) => draft.execution_id === editingDraft.execution_id)
+        .sort((a, b) => b.draft_version - a.draft_version)
+    : [];
+  const hasFutureScheduleTime = Boolean(draftForm.scheduledAt)
+    && new Date(draftForm.scheduledAt).getTime() > Date.now();
+  const draftImageRequirements = draftForm.imageRequirement
+    .split("\n")
+    .filter((value) => value.trim());
+  const draftImageUrls = draftForm.imageUrls
+    .split("\n")
+    .filter((value) => value.trim());
+  const scheduleMissing = [
+    !draftForm.title.trim() && "提案名稱",
+    !draftForm.caption.trim() && "Instagram 文案",
+    !hasFutureScheduleTime && "未來的發布時間",
+    draftForm.carousel && draftImageRequirements.length < 2 && "至少兩項輪播素材需求",
+    draftImageUrls.some((url) => !url.startsWith("https://")) && "有效的公開 HTTPS 圖片網址",
+    draftForm.carousel && draftImageUrls.length > 0 && draftImageUrls.length < 2 && "至少兩張輪播圖片網址",
+  ].filter(Boolean) as string[];
+  const canCreateSchedule = scheduleMissing.length === 0;
   return (
     <main className="mx-auto min-h-screen w-[min(1160px,92vw)] py-10 text-maker-ink">
       <header className="mb-8 flex flex-wrap items-center justify-between gap-3">
@@ -479,7 +570,7 @@ export default function Dashboard() {
             </button>
           </div>
           {strategyRuns.length ? (
-            <ol className="m-0 grid list-none gap-3 p-0">
+            <ol className="m-0 grid max-h-[34rem] list-none gap-3 overflow-y-auto pr-2 p-0">
               {strategyRuns.map((run) => (
                 <li key={run.run_id}>
                   <button
@@ -571,9 +662,9 @@ export default function Dashboard() {
             <p className="m-0 font-mono text-xs font-semibold tracking-[.12em] text-maker-blue">
               CONTENT DRAFT
             </p>
-            <h2 className="mt-1 text-xl">Instagram 內容提案與排程</h2>
+            <h2 className="mt-1 text-xl">Instagram 內容提案</h2>
             <p className="mb-0 text-sm text-maker-muted">
-              草稿會保存版本與排程；尚不會發布到 Instagram。
+              發布時間只是規劃；需明確加入排程，尚不會發布到 Instagram。
             </p>
           </div>
           <label className="min-w-56 text-sm font-semibold">
@@ -595,10 +686,11 @@ export default function Dashboard() {
           </label>
         </div>
         {selectedStrategy ? (
-          <div className="mt-6 grid gap-6 lg:grid-cols-[1.05fr_.95fr]">
-            <form id="draft-form" onSubmit={createDraft} className="space-y-4 rounded-xl border border-maker-line p-5">
+          <>
+            <div className="mt-6 grid gap-6 lg:grid-cols-[1.05fr_.95fr]">
+            <form id="draft-form" onSubmit={(event) => { event.preventDefault(); saveDraft(); }} className="space-y-4 rounded-xl border border-maker-line p-5">
               <div className="flex items-center justify-between gap-3">
-                <h3 className="m-0 text-lg">{editingDraft ? `修改內容提案 v${editingDraft.draft_version}` : "新增內容提案"}</h3>
+                <h3 className="m-0 text-lg">{editingDraft ? `修改內容提案 ${proposalVersion(editingDraft)}` : "新增內容提案"}</h3>
                 {editingDraft && (
                   <button
                     type="button"
@@ -609,6 +701,27 @@ export default function Dashboard() {
                   </button>
                 )}
               </div>
+              {editingDraft && revisionHistory.length > 1 && (
+                <Field label="版本歷史">
+                  <select
+                    className="input"
+                    value={editingDraft.id}
+                    onChange={(event) => {
+                      const version = drafts.find((draft) => draft.id === Number(event.target.value));
+                      if (version) beginRevision(version);
+                    }}
+                  >
+                    {revisionHistory.map((draft) => (
+                      <option key={draft.id} value={draft.id}>
+                        {proposalVersion(draft)}{draft.id === editingDraft.id ? "（目前檢視）" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <small className="mt-1 block text-maker-muted">
+                    選擇舊版本後儲存，會建立一個新的最新版本，不會覆寫歷史。
+                  </small>
+                </Field>
+              )}
               <label className="flex items-start gap-3 rounded-xl border border-maker-line p-4 text-sm">
                 <input
                   type="checkbox"
@@ -636,14 +749,19 @@ export default function Dashboard() {
                   onChange={(event) => setDraftForm({ ...draftForm, scheduledAt: event.target.value })}
                 />
                 <small className="mt-1 block text-maker-muted">
-                  設定後會儲存為已排程；目前只保存時間，不會自動發布。
+                  可先保存發布規劃；建立排程時必須選擇未來時間。
                 </small>
+                {draftForm.scheduledAt && !hasFutureScheduleTime && (
+                  <small className="mt-1 block font-semibold text-red-700">
+                    排程時間必須晚於目前時間。
+                  </small>
+                )}
               </Field>
               {!editingDraft && (
                 <div className="rounded-xl bg-[#edf3f8] p-4">
                   <p className="m-0 text-sm font-semibold text-maker-blue">由 Agent 自動產生內容提案</p>
                   <p className="mb-3 mt-1 text-sm text-maker-muted">
-                    會依上方貼文形式與排程時間建立文案、hashtags 與素材需求；不會虛構圖片網址或直接發布。
+                    會依上方貼文形式與發布規劃建立文案、hashtags 與素材需求；不會虛構圖片網址或直接發布。
                   </p>
                   <button
                     type="button"
@@ -693,7 +811,7 @@ export default function Dashboard() {
                   placeholder="封面：1080×1080，學生展示實作成品"
                 />
               </Field>
-              <Field label="公開圖片網址（每行一個，可稍後補）">
+              <Field label="公開圖片網址（每行一個）">
                 <textarea
                   className="input min-h-20 resize-y"
                   value={draftForm.imageUrls}
@@ -707,58 +825,52 @@ export default function Dashboard() {
               >
                 {draftSaving ? "儲存提案中…" : editingDraft ? "建立新版本" : "儲存內容提案"}
               </button>
+              {editingDraft && (
+                <button
+                  type="button"
+                  disabled={draftSaving || !canCreateSchedule}
+                  onClick={() => saveDraft(true)}
+                  className="w-full rounded-xl bg-orange-700 px-4 py-3 font-semibold text-white transition hover:bg-orange-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {draftSaving ? "建立排程中…" : "建立排程"}
+                </button>
+              )}
+              {editingDraft && !canCreateSchedule && (
+                <p className="m-0 text-center text-sm text-maker-muted">
+                  建立排程前請完成：{scheduleMissing.join("、")}
+                </p>
+              )}
+              {editingDraft?.status === "SCHEDULED" && (
+                <button
+                  type="button"
+                  disabled={scheduleSaving === editingDraft.id}
+                  onClick={() => cancelSchedule(editingDraft)}
+                  className="w-full rounded-xl border border-maker-line px-4 py-3 font-semibold text-maker-muted transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {scheduleSaving === editingDraft.id ? "取消排程中…" : "取消排程"}
+                </button>
+              )}
             </form>
             <div className="rounded-xl border border-maker-line p-5">
               <h3 className="m-0 text-lg">此 Strategy 的內容提案</h3>
-              {drafts.length ? (
-                <ol className="mt-4 grid list-none gap-3 p-0">
-                  {drafts.map((draft) => (
+              {activeDrafts.length ? (
+                <ol className="mt-4 grid max-h-[34rem] list-none gap-3 overflow-y-auto pr-2 p-0">
+                  {activeDrafts.map((draft) => (
                     <li key={draft.id} className="rounded-xl border border-maker-line p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <strong>
-                          提案 {proposalVersion(draft)}
-                        </strong>
-                        <Pill status={draft.status} />
-                      </div>
-                      <p className="mb-2 mt-3 whitespace-pre-wrap leading-6">
-                        {draft.payload.caption || "尚無文案"}
-                      </p>
-                      {!!draft.payload.hashtags?.length && (
-                        <p className="m-0 text-sm text-maker-blue">
-                          {draft.payload.hashtags.map((tag) => `#${tag}`).join(" ")}
-                        </p>
-                      )}
-                      {draft.payload.scheduled_at && (
-                        <p className="mb-0 mt-3 text-sm text-maker-muted">
-                          預計發布：{new Date(draft.payload.scheduled_at).toLocaleString("zh-TW")}
-                        </p>
-                      )}
-                      {draft.payload.carousel && (
-                        <p className="mb-0 mt-3 text-sm text-maker-muted">
-                          輪播素材需求：{draft.payload.image_requirements?.length || 0} 張
-                        </p>
-                      )}
-                      {!['SUPERSEDED', 'EXECUTING', 'SUCCEEDED'].includes(draft.status) && (
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() => beginRevision(draft)}
-                            className="rounded-lg bg-stone-100 px-3 py-2 text-sm font-semibold text-maker-blue transition hover:bg-stone-200"
-                          >
-                            {draft.payload.scheduled_at ? "修改提案或排程" : "修改提案或設定排程"}
-                          </button>
-                          {draft.payload.scheduled_at && (
-                            <button
-                              type="button"
-                              disabled={scheduleSaving === draft.id}
-                              onClick={() => cancelSchedule(draft)}
-                              className="rounded-lg border border-maker-line px-3 py-2 text-sm font-semibold text-maker-muted transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              {scheduleSaving === draft.id ? "取消排程中…" : "取消排程"}
-                            </button>
-                          )}
-                        </div>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => beginRevision(draft)}
+                        className="w-full text-left"
+                      >
+                        <span className="flex flex-wrap items-center justify-between gap-2">
+                          <strong>提案 {proposalVersion(draft)}</strong>
+                          <Pill status={draft.status} />
+                        </span>
+                        <span className="mt-2 block truncate text-sm text-maker-muted">
+                          {draft.payload.title || draft.payload.caption || "尚無提案內容"}
+                        </span>
+                        <span className="mt-2 block text-sm font-semibold text-maker-blue">點擊查看與修改 →</span>
+                      </button>
                     </li>
                   ))}
                 </ol>
@@ -766,10 +878,46 @@ export default function Dashboard() {
                 <p className="py-12 text-center text-maker-muted">尚未建立內容提案。</p>
               )}
             </div>
-          </div>
+            </div>
+          </>
         ) : (
           <p className="mt-8 rounded-xl bg-stone-50 p-6 text-center text-maker-muted">
             尚無可用 Strategy，請先完成 Agent 策略工作後再重新整理。
+          </p>
+        )}
+      </section>
+      <section className="mt-5 rounded-2xl border border-orange-200 bg-orange-50 p-6 shadow-panel" aria-labelledby="schedule-heading">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="m-0 font-mono text-xs font-semibold tracking-[.12em] text-orange-800">SCHEDULE</p>
+            <h2 id="schedule-heading" className="mt-1 text-xl">已加入排程</h2>
+            <p className="mb-0 text-sm text-maker-muted">所有 Strategy 的已排程內容會集中顯示在這裡。</p>
+          </div>
+          <span className="rounded-full bg-white px-3 py-1 text-sm font-semibold text-orange-800">
+            {scheduledDrafts.length} 則
+          </span>
+        </div>
+        {scheduledDrafts.length ? (
+          <ul className="mt-4 grid list-none gap-3 p-0 md:grid-cols-2">
+            {scheduledDrafts.map((draft) => (
+              <li key={draft.id} className="rounded-xl border border-orange-200 bg-white p-4">
+                <strong className="block">{draft.payload.title || `提案 ${proposalVersion(draft)}`}</strong>
+                <p className="mb-0 mt-2 text-sm text-maker-muted">
+                  預計發布：{draft.payload.scheduled_at ? new Date(draft.payload.scheduled_at).toLocaleString("zh-TW") : "未設定時間"}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => openScheduledDraft(draft)}
+                  className="mt-4 rounded-lg bg-orange-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-orange-800"
+                >
+                  查看提案
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mb-0 mt-4 rounded-xl border border-dashed border-orange-200 bg-white/70 p-5 text-center text-sm text-maker-muted">
+            尚未有內容加入排程。
           </p>
         )}
       </section>

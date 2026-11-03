@@ -6,7 +6,7 @@ import hashlib
 import json
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from .models import Execution, ExecutionAction, Strategy
@@ -17,6 +17,29 @@ def render_caption(caption: str, hashtags: list[str]) -> str:
     """Return the exact text the Meta adapter will receive; never include secrets."""
     tag_line = " ".join(f"#{tag}" for tag in hashtags)
     return f"{caption.strip()}\n\n{tag_line}".rstrip()
+
+
+def meta_adapter_payload(
+    *, caption: str, hashtags: list[str], image_urls: list[str], carousel: bool
+) -> dict | None:
+    """Build provider-safe input without performing a Meta publish request."""
+    rendered_caption = render_caption(caption, hashtags)
+    if carousel and len(image_urls) >= 2:
+        return {
+            "media_type": "CAROUSEL",
+            "caption": rendered_caption,
+            "children": [
+                {"image_url": url, "is_carousel_item": True}
+                for url in image_urls
+            ],
+        }
+    if not carousel and len(image_urls) == 1:
+        return {
+            "media_type": "IMAGE",
+            "image_url": image_urls[0],
+            "caption": rendered_caption,
+        }
+    return None
 
 
 def _payload(
@@ -35,12 +58,14 @@ def _payload(
         "image_urls": image_urls,
         "carousel": data.carousel,
         "scheduled_at": scheduled_at,
-        # The current Meta sandbox can publish only one public image. A carousel
-        # remains a platform draft until that adapter adds carousel support.
-        "meta_adapter_payload": (
-            {"image_url": image_urls[0], "caption": render_caption(data.caption, data.hashtags)}
-            if len(image_urls) == 1 and not data.carousel
-            else None
+        "schedule_requested": data.schedule_requested,
+        # This is provider input only; the approval/publishing worker owns the
+        # later container creation and publish request.
+        "meta_adapter_payload": meta_adapter_payload(
+            caption=data.caption,
+            hashtags=list(data.hashtags),
+            image_urls=image_urls,
+            carousel=data.carousel,
         ),
     }
     if proposal_version is not None:
@@ -106,7 +131,7 @@ def create_content_draft(
         execution_id=execution.id,
         tool="meta_api",
         operation="instagram_publish",
-        status="SCHEDULED" if data.scheduled_at else "DRAFT",
+        status="SCHEDULED" if data.schedule_requested else "DRAFT",
         draft_version=1,
         content_hash=content_hash,
         payload=payload,
@@ -134,16 +159,35 @@ def create_content_draft_version(
             if key not in {"scheduled_at", "proposal_version"}
         }
     )
-    version = previous.draft_version + 1
+    # A user may restore any historical version. New content must always become
+    # the next version in the proposal, rather than colliding with an existing
+    # successor of the selected historical row.
+    version = (
+        db.scalar(
+            select(func.coalesce(func.max(ExecutionAction.draft_version), 0)).where(
+                ExecutionAction.workspace_id == previous.workspace_id,
+                ExecutionAction.execution_id == previous.execution_id,
+            )
+        )
+        + 1
+    )
     # Include the version because an intentional edit may restore earlier text.
     idempotency_key = _hash({"execution_id": previous.execution_id, "version": version, **payload})
-    previous.status = "SUPERSEDED"
+    db.execute(
+        update(ExecutionAction)
+        .where(
+            ExecutionAction.workspace_id == previous.workspace_id,
+            ExecutionAction.execution_id == previous.execution_id,
+            ExecutionAction.status.not_in({"SUPERSEDED", "EXECUTING", "SUCCEEDED"}),
+        )
+        .values(status="SUPERSEDED")
+    )
     action = ExecutionAction(
         workspace_id=previous.workspace_id,
         execution_id=previous.execution_id,
         tool="meta_api",
         operation="instagram_publish",
-        status="SCHEDULED" if data.scheduled_at else "DRAFT",
+        status="SCHEDULED" if data.schedule_requested else "DRAFT",
         draft_version=version,
         content_hash=content_hash,
         payload=payload,

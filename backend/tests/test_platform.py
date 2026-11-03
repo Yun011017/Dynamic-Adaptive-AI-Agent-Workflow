@@ -24,6 +24,13 @@ settings.migration_database_url = test_url
 settings.platform_api_key = "integration-test-key"
 settings.platform_workspace_slug = "development"
 
+# Test discovery imports other modules first, so their app.db engine may already
+# point at the default database. Rebind it before importing app modules below;
+# this suite must always use its own generated PostgreSQL schema.
+import app.db as db
+db.engine.dispose()
+db.engine = db.build_engine(test_url)
+db.SessionLocal.configure(bind=db.engine)
 from app.db import engine, SessionLocal
 from app.agent_worker import process_one_run
 from app.main import app
@@ -283,6 +290,7 @@ class PlatformTests(unittest.TestCase):
             "image_requirements": ["1080 by 1080 cover showing a student project"],
             "image_urls": ["https://images.example.test/cover.jpg"],
             "scheduled_at": "2030-01-02T18:30:00+08:00",
+            "schedule_requested": True,
         }
         created = self.client.post(
             f"/strategies/{strategy['id']}/content-drafts", headers=self.headers, json=payload
@@ -301,7 +309,7 @@ class PlatformTests(unittest.TestCase):
         revised = self.client.post(
             f"/content-drafts/{draft['id']}/versions",
             headers=self.headers,
-            json={**payload, "caption": "Build something real with us", "scheduled_at": None},
+            json={**payload, "caption": "Build something real with us", "scheduled_at": None, "schedule_requested": False},
         )
         self.assertEqual(revised.status_code, 201, revised.text)
         self.assertEqual(revised.json()["draft_version"], 2)
