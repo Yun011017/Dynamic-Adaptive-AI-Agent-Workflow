@@ -90,9 +90,9 @@ class AgentRunnerTests(unittest.TestCase):
         self.assertEqual(result["form_summary"]["attendance"]["yes"], 1)
 
     def test_api_source_is_neon(self):
-        self.assertEqual(AgentRunCreate(goal="test").data_source, "neon_form_summary")
+        self.assertEqual(AgentRunCreate(goal_id=1, goal="test").data_source, "neon_form_summary")
         with self.assertRaises(ValueError):
-            AgentRunCreate(goal="test", data_source="arbitrary")
+            AgentRunCreate(goal_id=1, goal="test", data_source="arbitrary")
 
     def test_audience_data_changes_summary_and_recommendation(self):
         rows = [dict(is_member=True, will_attend=True, school='臺大', department_grade='資工二', activity_name='物聯網'),

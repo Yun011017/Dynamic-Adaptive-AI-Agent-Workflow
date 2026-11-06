@@ -238,10 +238,12 @@ def revise_draft(action_id: int, data: ContentDraftCreate, db: DB, tenant: Tenan
 @app.post("/agent/runs", response_model=AgentRunRead, status_code=202)
 def create_agent_run(data: AgentRunCreate, db: DB, tenant: Tenant):
     """Queue an Agent run for a separate worker; HTTP never waits for model work."""
+    scoped(db, Goal, data.goal_id, tenant)
     input_payload = data.model_dump()
     row = AgentRun(
         workspace_id=tenant,
         run_id=str(uuid.uuid4()),
+        goal_id=data.goal_id,
         status="PENDING",
         input_payload=input_payload,
         agent_provider=settings.agent_provider,

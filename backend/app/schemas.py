@@ -143,6 +143,7 @@ class ContentDraftGenerateRequest(BaseModel):
 
 
 class AgentRunCreate(BaseModel):
+    goal_id: int = Field(gt=0)
     goal: str = Field(min_length=1, max_length=500)
     context: str = Field(default="", max_length=4_000)
     data_source: Literal["neon_form_summary"] = "neon_form_summary"
@@ -152,6 +153,7 @@ class AgentRunCreate(BaseModel):
 class AgentRunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     run_id: str
+    goal_id: int | None
     status: str
     input_payload: dict
     output_payload: dict | None

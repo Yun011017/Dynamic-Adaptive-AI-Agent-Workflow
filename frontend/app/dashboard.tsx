@@ -255,9 +255,18 @@ export default function Dashboard() {
     if (!form.goal.trim()) return setError("請填寫活動目標。");
     setError("");
     try {
+      const goal = await call("/goals", {
+        method: "POST",
+        body: JSON.stringify({
+          title: form.goal.trim(),
+          description: form.context.trim() || null,
+          constraints: { channel: form.channel },
+        }),
+      });
       const run = await call("/agent/runs", {
         method: "POST",
         body: JSON.stringify({
+          goal_id: goal.id,
           goal: form.goal.trim(),
           context: form.context.trim(),
           constraints: { channel: form.channel },
@@ -280,6 +289,29 @@ export default function Dashboard() {
       setDraftForm(blankDraft);
     }
     resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  async function regenerateStrategy(run) {
+    const payload = run?.input_payload;
+    if (!payload?.goal_id) return setError("這筆工作沒有可沿用的活動目標。");
+    setError("");
+    try {
+      const nextRun = await call("/agent/runs", {
+        method: "POST",
+        body: JSON.stringify({
+          goal_id: payload.goal_id,
+          goal: payload.goal,
+          context: payload.context || "",
+          constraints: payload.constraints || {},
+          data_source: payload.data_source || "neon_form_summary",
+        }),
+      });
+      setRuns((all) => [nextRun, ...all]);
+      setSelected(nextRun.run_id);
+      setSelectedStrategy(null);
+      setDrafts([]);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "無法重新產生 Strategy。");
+    }
   }
   async function saveDraft(scheduleRequested = draftForm.scheduleRequested) {
     if (!selectedStrategy) return setError("請先選擇一筆 Strategy。");
@@ -709,22 +741,36 @@ export default function Dashboard() {
                 </p>
               </div>
             ) : current.output_payload ? (
-              <div className="grid gap-4 md:grid-cols-2">
-                <Card
-                  title="目標受眾"
-                  value={current.output_payload.target_audience}
-                />
-                <Card
-                  title="內容方向"
-                  value={current.output_payload.content_direction}
-                />
-                <Card title="建議依據" value={current.output_payload.reason} />
-                <Card
-                  title="預期指標"
-                  value={(current.output_payload.expected_metrics || []).join(
-                    "、",
-                  )}
-                />
+              <div>
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <p className="m-0 text-sm text-maker-muted">
+                    Strategy v{current.output_payload.strategy_version}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => regenerateStrategy(current)}
+                    className="rounded-lg bg-maker-blue px-3 py-2 text-sm font-semibold text-white"
+                  >
+                    重新產生 Strategy
+                  </button>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Card
+                    title="目標受眾"
+                    value={current.output_payload.target_audience}
+                  />
+                  <Card
+                    title="內容方向"
+                    value={current.output_payload.content_direction}
+                  />
+                  <Card title="建議依據" value={current.output_payload.reason} />
+                  <Card
+                    title="預期指標"
+                    value={(current.output_payload.expected_metrics || []).join(
+                      "、",
+                    )}
+                  />
+                </div>
               </div>
             ) : (
               <p className="text-maker-muted">正在等待 worker 處理…</p>
