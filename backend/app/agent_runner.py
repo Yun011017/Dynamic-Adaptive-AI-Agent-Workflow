@@ -10,10 +10,12 @@ from .form_summary import get_form_summary
 
 class RunState(TypedDict):
     workspace_id: int | None
+    goal_id: int | None
     goal: str
     context: str
     constraints: dict
     form_summary: dict
+    observations: list[dict]
     recommendation: dict
 
 
@@ -23,6 +25,7 @@ def _read_summary(state: RunState) -> dict:
 
 def _recommend(state: RunState) -> dict:
     summary = state["form_summary"]
+    observations = state.get("observations", [])
     count = summary["response_count"]
     members, attendance = summary["membership"], summary["attendance"]
     def distribution(key):
@@ -37,13 +40,18 @@ def _recommend(state: RunState) -> dict:
            if attendance["yes"] else "尚無明確願意參加的回覆，先補齊意願資料，再決定後續宣傳。")
         if count else "form_responses 尚無此來源的回覆，請先執行表單同步。"
     )
+    observation_metrics = sorted({row["metric"] for row in observations if row.get("metric")})
+    reason = f"依據 Neon 已匯入的 {count} 筆回覆；僅使用 form_responses 的結構化統計。"
+    if observation_metrics:
+        reason += f"既有觀測指標：{', '.join(observation_metrics)}。"
     return {"recommendation": {
         "target_audience": "依已回覆的學校與系級分析客群，尚無內容偏好資料",
         "content_direction": direction,
-        "reason": f"依據 Neon 已匯入的 {count} 筆回覆；僅使用 form_responses 的結構化統計。",
+        "reason": reason,
         "expected_metrics": ["response_count"],
         "goal": state["goal"], "context": state["context"], "constraints": state["constraints"],
         "data_source": summary["source"], "form_summary": summary,
+        "observations": observations,
         "summary_id": summary["summary_id"],
         "evidence": {"response_count": count, "membership": members, "attendance": attendance, "schools": summary["schools"], "department_grades": summary["department_grades"], "activities": summary["activities"]},
     }}
@@ -59,9 +67,11 @@ def build_graph():
     return graph.compile()
 
 
-def _run_local(*, goal: str, context: str, constraints: dict, workspace_id: int | None) -> dict:
+def _run_local(*, goal: str, context: str, constraints: dict, workspace_id: int | None,
+               goal_id: int | None, observations: list[dict]) -> dict:
     result = build_graph().invoke(
-        {"goal": goal, "context": context, "constraints": constraints, "workspace_id": workspace_id}
+        {"goal": goal, "context": context, "constraints": constraints,
+         "workspace_id": workspace_id, "goal_id": goal_id, "observations": observations}
     )
     return result["recommendation"]
 
@@ -110,7 +120,8 @@ def _text_content(content: object) -> str:
     return str(content)
 
 
-def _run_model(*, goal: str, context: str, constraints: dict, provider: str, model_name: str, workspace_id: int | None) -> dict:
+def _run_model(*, goal: str, context: str, constraints: dict, provider: str, model_name: str,
+               workspace_id: int | None, goal_id: int | None, observations: list[dict]) -> dict:
     """Use the same tool-calling shape as agent_lab without terminal interaction."""
     from langchain_core.messages import HumanMessage, SystemMessage
     from langchain_core.tools import tool
@@ -122,7 +133,7 @@ def _run_model(*, goal: str, context: str, constraints: dict, provider: str, mod
     @tool
     def get_form_summary_tool() -> dict:
         """取得 Neon form_responses 的社員、參加意願、學校、系級與活動名稱統計，不含逐筆資料。"""
-        return summary
+        return {**summary, "observations": observations}
 
     tools = [get_form_summary_tool]
     model = _model_for(provider, model_name).bind_tools(tools)
@@ -154,7 +165,8 @@ def _run_model(*, goal: str, context: str, constraints: dict, provider: str, mod
     graph.add_edge("tools", "agent")
     result = graph.compile().invoke({
         "messages": [HumanMessage(content=json.dumps({
-            "goal": goal, "context": context, "constraints": constraints,
+            "goal_id": goal_id, "goal": goal, "context": context,
+            "constraints": constraints, "observations": observations,
         }, ensure_ascii=False))]
     })
     final_text = _text_content(result["messages"][-1].content)
@@ -171,16 +183,23 @@ def _run_model(*, goal: str, context: str, constraints: dict, provider: str, mod
         "constraints": constraints,
         "data_source": summary["source"],
         "form_summary": summary,
+        "observations": observations,
         "summary_id": summary["summary_id"],
         "tool_called": True,
     }
 
 
-def run_agent(*, goal: str, context: str, constraints: dict, provider: str = "local", model_name: str = "deterministic-langgraph", workspace_id: int | None = None) -> dict:
+def run_agent(*, goal: str, context: str, constraints: dict, provider: str = "local",
+              model_name: str = "deterministic-langgraph", workspace_id: int | None = None,
+              goal_id: int | None = None, observations: list[dict] | None = None) -> dict:
     """Run a bounded Agent graph; model credentials stay in worker-only settings."""
+    observations = observations or []
     if provider == "local":
-        return _run_local(goal=goal, context=context, constraints=constraints, workspace_id=workspace_id)
+        return _run_local(goal=goal, context=context, constraints=constraints,
+                          workspace_id=workspace_id, goal_id=goal_id,
+                          observations=observations)
     return _run_model(
         goal=goal, context=context, constraints=constraints,
         provider=provider, model_name=model_name, workspace_id=workspace_id,
+        goal_id=goal_id, observations=observations,
     )

@@ -14,8 +14,8 @@ class AgentWorkerTests(unittest.TestCase):
 
     def process(self, *, sync_error=None, response_count=3, agent_error=None):
         row = SimpleNamespace(id=1, run_id='test-run', workspace_id=7, agent_provider='local',
-                              agent_model='deterministic-langgraph', input_payload={'goal': 'test'},
-                              attempts=1, output_payload=None, error_code=None, status='RUNNING')
+                              agent_model='deterministic-langgraph', input_payload={'goal': 'test', 'goal_id': 3},
+                              goal_id=3, attempts=1, output_payload=None, error_code=None, status='RUNNING')
         sequence = []
         def sync(**kwargs):
             self.assertEqual(kwargs, {'workspace_id': 7})
@@ -29,7 +29,7 @@ class AgentWorkerTests(unittest.TestCase):
             if agent_error:
                 raise agent_error
             return dict(reason='analysis', form_summary={'response_count': response_count})
-        with patch.object(self.worker, 'SessionLocal') as session, patch.object(self.worker, 'claim_next_run', return_value=row), patch.object(self.worker, 'checkpoint') as checkpoint, patch.object(self.worker, 'sync_once', side_effect=sync), patch.object(self.worker, 'run_agent', side_effect=agent):
+        with patch.object(self.worker, 'SessionLocal') as session, patch.object(self.worker, 'claim_next_run', return_value=row), patch.object(self.worker, 'checkpoint') as checkpoint, patch.object(self.worker, 'sync_once', side_effect=sync), patch.object(self.worker, 'load_strategy_context', return_value=([], {'form_response_ids': [], 'observation_ids': [], 'external_event_ids': []})), patch.object(self.worker, 'save_strategy', return_value=SimpleNamespace(id=12, version=1, content='{}')), patch.object(self.worker, 'run_agent', side_effect=agent):
             session.return_value.__enter__.return_value = MagicMock()
             self.assertEqual(self.worker.process_one_run(), 'test-run')
         self.assertEqual(sequence, ['sync', 'agent'])
@@ -108,7 +108,8 @@ class AgentWorkerTests(unittest.TestCase):
     def test_strategy_result_automatically_queues_content_draft_work(self):
         row = SimpleNamespace(
             id=1, run_id="strategy-run", workspace_id=7, agent_provider="local",
-            agent_model="deterministic-langgraph", input_payload={"goal": "test"},
+            agent_model="deterministic-langgraph", input_payload={"goal": "test", "goal_id": 3},
+            goal_id=3,
             attempts=1, output_payload=None, error_code=None, status="RUNNING",
         )
         queued = SimpleNamespace(run_id="content-run")
@@ -116,6 +117,8 @@ class AgentWorkerTests(unittest.TestCase):
              patch.object(self.worker, "claim_next_run", return_value=row), \
              patch.object(self.worker, "checkpoint"), \
              patch.object(self.worker, "sync_once", return_value={"read": 0, "inserted": 0, "skipped": 0}), \
+             patch.object(self.worker, "load_strategy_context", return_value=([], {"form_response_ids": [], "observation_ids": [], "external_event_ids": []})), \
+             patch.object(self.worker, "save_strategy", return_value=SimpleNamespace(id=12, version=1, content="{}")), \
              patch.object(self.worker, "run_agent", return_value={"strategy_id": 12, "reason": "strategy"}), \
              patch.object(self.worker, "queue_content_draft_run", return_value=queued) as queue:
             session.return_value.__enter__.return_value = MagicMock()

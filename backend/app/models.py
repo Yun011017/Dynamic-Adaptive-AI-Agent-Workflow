@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, ForeignKeyConstraint, Integer, JSON, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
@@ -66,6 +66,8 @@ class Execution(TenantRow, Base):
 class AgentRun(TenantRow, Base):
     __tablename__ = "agent_runs"
     run_id: Mapped[str] = mapped_column(String(36), index=True)
+    # Historical runs predate the Goal contract; new API-created runs always set it.
+    goal_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
     status: Mapped[str] = mapped_column(String(16), server_default="PENDING")
     input_payload: Mapped[dict] = mapped_column(JSON, server_default="{}")
     output_payload: Mapped[dict | None] = mapped_column(JSON)
@@ -78,6 +80,7 @@ class AgentRun(TenantRow, Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
+        ForeignKeyConstraint(["workspace_id", "goal_id"], ["goals.workspace_id", "goals.id"]),
         UniqueConstraint("run_id"),
         UniqueConstraint("workspace_id", "id"),
         CheckConstraint("status IN ('PENDING','RUNNING','COMPLETED','FAILED')", name="ck_agent_runs_status"),
@@ -170,4 +173,29 @@ class Observation(TenantRow, Base):
         ForeignKeyConstraint(["workspace_id", "strategy_id"], ["strategies.workspace_id", "strategies.id"]),
         ForeignKeyConstraint(["workspace_id", "execution_id"], ["executions.workspace_id", "executions.id"]),
         UniqueConstraint("workspace_id", "external_event_id", "metric", "observed_at", name="uq_observation_source_metric"),
+    )
+
+class ApprovalRequest(TenantRow, Base):
+    __tablename__ = "approval_requests"
+    action_id: Mapped[int] = mapped_column(BigInteger)
+    draft_version: Mapped[int] = mapped_column(Integer)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), server_default="PENDING_REVIEW")
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+    requested_by: Mapped[str] = mapped_column(String(255), server_default="admin")
+    reviewed_by: Mapped[str | None] = mapped_column(String(255))
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "action_id"],
+            ["execution_actions.workspace_id", "execution_actions.id"],
+            name="fk_approval_action_tenant",
+        ),
+        CheckConstraint(
+            "status IN ('PENDING_REVIEW', 'APPROVED', 'REJECTED', 'EXPIRED')",
+            name="ck_approval_status",
+        ),
+        Index("ix_approval_requests_action_id", "action_id"),
     )

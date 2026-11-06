@@ -238,10 +238,12 @@ def revise_draft(action_id: int, data: ContentDraftCreate, db: DB, tenant: Tenan
 @app.post("/agent/runs", response_model=AgentRunRead, status_code=202)
 def create_agent_run(data: AgentRunCreate, db: DB, tenant: Tenant):
     """Queue an Agent run for a separate worker; HTTP never waits for model work."""
+    scoped(db, Goal, data.goal_id, tenant)
     input_payload = data.model_dump()
     row = AgentRun(
         workspace_id=tenant,
         run_id=str(uuid.uuid4()),
+        goal_id=data.goal_id,
         status="PENDING",
         input_payload=input_payload,
         agent_provider=settings.agent_provider,
@@ -281,3 +283,62 @@ def get_agent_run(run_id: str, db: DB, tenant: Tenant):
     if row is None:
         raise HTTPException(404, "Agent run not found")
     return row
+
+from app.models import ApprovalRequest
+from app.schemas import ApprovalDecisionRequest, ApprovalRequestRead
+from app.services.approval_service import ApprovalService
+from app.services.publisher_service import InstagramPublisherService
+
+@app.post("/actions/{action_id}/approval-requests", response_model=ApprovalRequestRead, status_code=201)
+def submit_action_for_review(action_id: int, db: DB, tenant: Tenant):
+    action = scoped(db, ExecutionAction, action_id, tenant)
+    approval = ApprovalService.submit_for_review(db, action=action)
+    db.commit()
+    db.refresh(approval)
+    return approval
+
+@app.get("/approval-requests", response_model=list[ApprovalRequestRead])
+def list_approval_requests(db: DB, tenant: Tenant, status: str = "PENDING_REVIEW"):
+    return read_with_retry(
+        lambda: db.scalars(
+            select(ApprovalRequest)
+            .where(ApprovalRequest.workspace_id == tenant, ApprovalRequest.status == status)
+            .order_by(ApprovalRequest.requested_at.desc())
+        ).all(),
+        reset=db.rollback,
+    )
+
+@app.post("/approval-requests/{approval_id}/decision", response_model=ApprovalRequestRead)
+def decide_approval_request(approval_id: int, data: ApprovalDecisionRequest, db: DB, tenant: Tenant):
+    approval = scoped(db, ApprovalRequest, approval_id, tenant)
+    action = scoped(db, ExecutionAction, approval.action_id, tenant)
+    if data.expected_version and action.draft_version != data.expected_version:
+        raise HTTPException(409, "Action draft version mismatch")
+    
+    updated_approval = ApprovalService.process_decision(
+        db,
+        approval=approval,
+        action=action,
+        decision=data.decision,
+        reason=data.reason,
+    )
+    db.commit()
+    db.refresh(updated_approval)
+    return updated_approval
+
+@app.post("/actions/{action_id}/execute")
+async def execute_action(action_id: int, db: DB, tenant: Tenant):
+    action = scoped(db, ExecutionAction, action_id, tenant)
+    approval = db.scalar(
+        select(ApprovalRequest)
+        .where(
+            ApprovalRequest.workspace_id == tenant,
+            ApprovalRequest.action_id == action.id,
+            ApprovalRequest.draft_version == action.draft_version,
+        )
+        .order_by(ApprovalRequest.id.desc())
+    )
+    
+    # 執行前置檢查與受控發布
+    external_id = await InstagramPublisherService.publish_action(db, action, approval)
+    return {"message": "發布成功", "action_id": action.id, "external_id": external_id, "status": "SUCCEEDED"}

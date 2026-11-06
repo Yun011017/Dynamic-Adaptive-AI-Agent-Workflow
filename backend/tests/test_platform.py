@@ -149,13 +149,15 @@ class PlatformTests(unittest.TestCase):
     def test_09_repeated_migrate(self):
         command.upgrade(self.config,"head")
         with engine.connect() as c:
-            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0007")
+            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0009")
 
     def test_10_agent_run_is_saved_and_scoped(self):
+        goal = self.client.post("/goals", headers=self.headers, json={"title": "Improve workshop registrations"}).json()
         response = self.client.post(
             "/agent/runs",
             headers=self.headers,
             json={
+                "goal_id": goal["id"],
                 "goal": "Improve workshop registrations",
                 "context": "Student club event",
                 "constraints": {"channel": "instagram"},
@@ -167,10 +169,12 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual(run["agent_provider"], "local")
         self.assertIsNone(run["output_payload"])
         with patch("app.agent_worker.sync_once", return_value={"read": 0, "inserted": 0, "skipped": 0}):
-            self.assertEqual(process_one_run(), run["run_id"])
+            self.assertEqual(process_one_run(run["run_id"]), run["run_id"])
         run = self.client.get(f"/agent/runs/{run['run_id']}", headers=self.headers).json()
         self.assertEqual(run["status"], "COMPLETED")
-        self.assertEqual(run["output_payload"]["data_source"], "neon_form_summary")
+        self.assertEqual(run["output_payload"]["goal_id"], goal["id"])
+        self.assertIn("strategy_id", run["output_payload"])
+        self.assertIn("form_response_ids", run["output_payload"]["data_source"])
         self.assertEqual(run["output_payload"]["form_sync"]["status"], "succeeded")
         self.assertEqual(
             self.client.get(f"/agent/runs/{run['run_id']}", headers=self.headers).status_code,
@@ -262,11 +266,12 @@ class PlatformTests(unittest.TestCase):
             original_save(db, responses, **kwargs)
             raise RuntimeError('SECRET simulated DB failure')
         with patch.object(settings, 'google_forms_source_id', 'fallback-integration'):
-            response = self.client.post('/agent/runs', headers=self.headers, json={'goal': 'Verify sync fallback'})
+            goal = self.client.post('/goals', headers=self.headers, json={'title': 'Verify sync fallback'}).json()
+            response = self.client.post('/agent/runs', headers=self.headers, json={'goal_id': goal['id'], 'goal': 'Verify sync fallback'})
             self.assertEqual(response.status_code, 202)
             run_id = response.json()['run_id']
             with patch('app.form_sync.fetch_table', return_value=[['test'], [1], [2], [3]]), patch('app.form_sync.save_responses', side_effect=fail_after_writes):
-                self.assertEqual(process_one_run(), run_id)
+                self.assertEqual(process_one_run(run_id), run_id)
             result = self.client.get(f'/agent/runs/{run_id}', headers=self.headers).json()
         self.assertEqual(result['status'], 'COMPLETED')
         self.assertEqual(result['output_payload']['form_summary']['response_count'], 2)
@@ -318,6 +323,56 @@ class PlatformTests(unittest.TestCase):
             previous = db.get(ExecutionAction, draft["id"])
             self.assertEqual(previous.status, "SUPERSEDED")
             self.assertEqual(db.query(Execution).filter_by(strategy_id=strategy["id"]).count(), 1)
+
+    def test_16_strategy_regeneration_versions_and_draft_links(self):
+        goal = self.client.post(
+            "/goals", headers=self.headers, json={"title": "Versioned strategy goal"}
+        ).json()
+
+        def create_run():
+            return self.client.post(
+                "/agent/runs",
+                headers=self.headers,
+                json={
+                    "goal_id": goal["id"],
+                    "goal": goal["title"],
+                    "context": "Keep the same campaign context",
+                    "constraints": {"channel": "instagram"},
+                },
+            ).json()
+
+        first_run = create_run()
+        self.assertEqual(process_one_run(first_run["run_id"]), first_run["run_id"])
+        first = self.client.get(
+            f"/agent/runs/{first_run['run_id']}", headers=self.headers
+        ).json()
+        first_strategy_id = first["output_payload"]["strategy_id"]
+        first_content_run_id = first["output_payload"]["content_draft_run_id"]
+        self.assertEqual(process_one_run(first_content_run_id), first_content_run_id)
+
+        second_run = create_run()
+        self.assertEqual(process_one_run(second_run["run_id"]), second_run["run_id"])
+        second = self.client.get(
+            f"/agent/runs/{second_run['run_id']}", headers=self.headers
+        ).json()
+        second_strategy_id = second["output_payload"]["strategy_id"]
+        second_content_run_id = second["output_payload"]["content_draft_run_id"]
+        self.assertEqual(process_one_run(second_content_run_id), second_content_run_id)
+
+        self.assertNotEqual(first_strategy_id, second_strategy_id)
+        self.assertEqual(first["output_payload"]["strategy_version"], 1)
+        self.assertEqual(second["output_payload"]["strategy_version"], 2)
+        with SessionLocal() as db:
+            actions = (
+                db.query(ExecutionAction)
+                .join(Execution, Execution.id == ExecutionAction.execution_id)
+                .filter(Execution.strategy_id.in_([first_strategy_id, second_strategy_id]))
+                .all()
+            )
+            self.assertEqual(
+                {action.payload["strategy_id"] for action in actions},
+                {first_strategy_id, second_strategy_id},
+            )
 
 
 if __name__ == "__main__":

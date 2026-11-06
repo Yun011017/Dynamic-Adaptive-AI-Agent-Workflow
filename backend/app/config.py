@@ -6,6 +6,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # Meta Instagram 發布設定
+    meta_ig_user_id: str = ""
+    meta_access_token: SecretStr | None = None
+    graph_api_version: str = "v21.0"
+    
     database_url: str
     migration_database_url: str = ""
     platform_api_key: str = ""

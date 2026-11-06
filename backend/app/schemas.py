@@ -143,6 +143,7 @@ class ContentDraftGenerateRequest(BaseModel):
 
 
 class AgentRunCreate(BaseModel):
+    goal_id: int = Field(gt=0)
     goal: str = Field(min_length=1, max_length=500)
     context: str = Field(default="", max_length=4_000)
     data_source: Literal["neon_form_summary"] = "neon_form_summary"
@@ -152,6 +153,7 @@ class AgentRunCreate(BaseModel):
 class AgentRunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     run_id: str
+    goal_id: int | None
     status: str
     input_payload: dict
     output_payload: dict | None
@@ -162,3 +164,23 @@ class AgentRunRead(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
+
+class ApprovalDecisionRequest(BaseModel):
+    decision: Literal["approved", "rejected", "needs_revision"]
+    reason: str | None = None
+    expected_version: int | None = None
+
+class ApprovalRequestRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    workspace_id: int
+    action_id: int
+    draft_version: int
+    content_hash: str
+    status: str
+    decision_reason: str | None
+    requested_by: str
+    reviewed_by: str | None
+    requested_at: datetime
+    decided_at: datetime | None
+    expires_at: datetime | None

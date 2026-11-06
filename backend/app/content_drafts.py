@@ -96,20 +96,19 @@ def create_content_draft(
     if existing:
         return existing, False
 
-    proposal_version = (
-        db.scalar(
-            select(func.count())
-            .select_from(ExecutionAction)
-            .join(Execution, Execution.id == ExecutionAction.execution_id)
-            .where(
-                ExecutionAction.workspace_id == strategy.workspace_id,
-                Execution.workspace_id == strategy.workspace_id,
-                Execution.strategy_id == strategy.id,
-                ExecutionAction.draft_version == 1,
-            )
+    count_val = db.scalar(
+        select(func.coalesce(func.count(ExecutionAction.id), 0))
+        .select_from(ExecutionAction)
+        .join(Execution, Execution.id == ExecutionAction.execution_id)
+        .where(
+            ExecutionAction.workspace_id == strategy.workspace_id,
+            Execution.workspace_id == strategy.workspace_id,
+            Execution.strategy_id == strategy.id,
+            ExecutionAction.draft_version == 1,
         )
-        + 1
-    )
+    ) or 0
+    proposal_version = int(count_val) + 1
+
     payload = _payload(strategy, data, proposal_version=proposal_version)
     content_hash = _hash(
         {
