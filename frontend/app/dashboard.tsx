@@ -50,6 +50,7 @@ type ContentDraft = {
   execution_id: number;
   status: string;
   draft_version: number;
+  external_id?: string | null;
   payload: {
     channel?: "instagram";
     title?: string;
@@ -62,8 +63,19 @@ type ContentDraft = {
     schedule_requested?: boolean;
     strategy_id?: number;
     proposal_version?: number;
+    external_id?: string | null; // 若後端同時放進 payload，也可選填
   };
 };
+type ApprovalItem = {
+  id: number;
+  action_id: number;
+  draft_version: number;
+  content_hash: string;
+  status: string;
+  requested_at: string;
+  action_payload?: any;
+};
+
 
 function Pill({ status }) {
   return (
@@ -90,6 +102,11 @@ function proposalVersion(draft: ContentDraft) {
 }
 
 export default function Dashboard() {
+
+  const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
+  const [actionMap, setActionMap] = useState<Record<number, any>>({});
+  const [executingActionId, setExecutingActionId] = useState<number | null>(null);
+
   const fallback =
     process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
   const [base, setBase] = useState(fallback);
@@ -464,6 +481,72 @@ export default function Dashboard() {
     draftForm.carousel && draftImageUrls.length > 0 && draftImageUrls.length < 2 && "至少兩張輪播圖片網址",
   ].filter(Boolean) as string[];
   const canCreateSchedule = scheduleMissing.length === 0;
+
+  const loadApprovals = async () => {
+    if (!key) return;
+    try {
+      const list = await call("/approval-requests?status=PENDING_REVIEW");
+      setApprovals(list);
+    } catch {
+      setApprovals([]);
+    }
+  };
+
+  useEffect(() => {
+    if (key) {
+      loadApprovals();
+      const interval = setInterval(loadApprovals, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [key, base]);
+
+  // 提交草稿進入審核
+  const submitForReview = async (actionId: number) => {
+    setError("");
+    try {
+      await call(`/actions/${actionId}/approval-requests`, { method: "POST" });
+      await loadApprovals();
+      if (selectedStrategy) {
+        call(`/strategies/${selectedStrategy}/content-drafts`).then(setDrafts);
+      }
+    } catch (err: any) {
+      setError(err.message || "送審失敗");
+    }
+  };
+
+  // 處理人工核准 / 退回 / 拒絕
+  const handleApprovalDecision = async (approvalId: number, decision: "approved" | "rejected" | "needs_revision") => {
+    setError("");
+    try {
+      await call(`/approval-requests/${approvalId}/decision`, {
+        method: "POST",
+        body: JSON.stringify({ decision, reason: decision === "approved" ? "人工確認核可" : "審核未通過" }),
+      });
+      await loadApprovals();
+      if (selectedStrategy) {
+        call(`/strategies/${selectedStrategy}/content-drafts`).then(setDrafts);
+      }
+    } catch (err: any) {
+      setError(err.message || "審核操作失敗");
+    }
+  };
+
+  // 點擊執行發布 (只有 APPROVED 狀態才會成功)
+  const triggerPublish = async (actionId: number) => {
+    setError("");
+    setExecutingActionId(actionId);
+    try {
+      const res = await call(`/actions/${actionId}/execute`, { method: "POST" });
+      alert(`貼文已成功發布至 Instagram！ID: ${res.external_id}`);
+      if (selectedStrategy) {
+        call(`/strategies/${selectedStrategy}/content-drafts`).then(setDrafts);
+      }
+    } catch (err: any) {
+      setError(err.message || "發布失敗");
+    } finally {
+      setExecutingActionId(null);
+    }
+  };
   return (
     <main className="mx-auto min-h-screen w-[min(1160px,92vw)] py-10 text-maker-ink">
       <header className="mb-8 flex flex-wrap items-center justify-between gap-3">
@@ -871,8 +954,38 @@ export default function Dashboard() {
                         </span>
                         <span className="mt-2 block text-sm font-semibold text-maker-blue">點擊查看與修改 →</span>
                       </button>
+                      {/* ======= 加入送審與發布控制按鈕 ======= */}
+                      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-maker-line pt-3">
+                        {draft.status === "DRAFT" && (
+                          <button
+                            type="button"
+                            onClick={() => submitForReview(draft.id)}
+                            className="rounded-lg bg-maker-blue px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#244e83]"
+                          >
+                            送交人工審核 →
+                          </button>
+                        )}
+                        {draft.status === "APPROVED" && (
+                          <button
+                            type="button"
+                            disabled={executingActionId === draft.id}
+                            onClick={() => triggerPublish(draft.id)}
+                            className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
+                          >
+                            {executingActionId === draft.id ? "發布中..." : "核准通過：立即發布到 IG"}
+                          </button>
+                        )}
+                        {draft.status === "SUCCEEDED" && (
+                          <span className="font-mono text-xs font-semibold text-emerald-700">
+                            ✓ 已成功發布 (ID: {draft.external_id})
+                          </span>
+                        )}
+                      </div>
+                      {/* ==================================== */}
                     </li>
+                    
                   ))}
+                  
                 </ol>
               ) : (
                 <p className="py-12 text-center text-maker-muted">尚未建立內容提案。</p>
@@ -886,6 +999,7 @@ export default function Dashboard() {
           </p>
         )}
       </section>
+      
       <section className="mt-5 rounded-2xl border border-orange-200 bg-orange-50 p-6 shadow-panel" aria-labelledby="schedule-heading">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -921,6 +1035,64 @@ export default function Dashboard() {
           </p>
         )}
       </section>
+      {/* ======= 加入審核專區控制台 ======= */}
+      <section className="mt-5 rounded-2xl border border-amber-200 bg-amber-50/50 p-6 shadow-panel">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="m-0 font-mono text-xs font-semibold tracking-[.12em] text-amber-800">
+              HUMAN-IN-THE-LOOP APPROVAL
+            </p>
+            <h2 className="mt-1 text-xl">待審核貼文佇列</h2>
+            <p className="mb-0 text-sm text-maker-muted">
+              發布高風險操作防線：核准前絕對禁止發布，經人工審查無誤後方可放行。
+            </p>
+          </div>
+          <span className="rounded-full bg-white px-3 py-1 text-sm font-semibold text-amber-800 shadow-sm">
+            {approvals.length} 則待審
+          </span>
+        </div>
+
+        {approvals.length ? (
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            {approvals.map((req) => (
+              <div key={req.id} className="rounded-xl border border-stone-200 bg-white p-5 shadow-sm">
+                <div className="flex items-center justify-between border-b pb-2">
+                  <span className="font-mono text-xs font-semibold text-stone-700">Action #{req.action_id} (v{req.draft_version})</span>
+                  <span className="font-mono text-[10px] text-stone-400">HASH: {req.content_hash.slice(0, 10)}...</span>
+                </div>
+                <div className="mt-4 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleApprovalDecision(req.id, "approved")}
+                    className="flex-1 rounded-lg bg-emerald-700 py-2 text-sm font-semibold text-white hover:bg-emerald-800"
+                  >
+                    核准 (Approve)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleApprovalDecision(req.id, "needs_revision")}
+                    className="flex-1 rounded-lg bg-amber-600 py-2 text-sm font-semibold text-white hover:bg-amber-700"
+                  >
+                    退回修改
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleApprovalDecision(req.id, "rejected")}
+                    className="flex-1 rounded-lg border border-red-300 py-2 text-sm font-semibold text-red-700 hover:bg-red-50"
+                  >
+                    拒絕
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="mb-0 mt-4 rounded-xl border border-dashed border-stone-200 bg-white/70 p-5 text-center text-sm text-maker-muted">
+            目前沒有等待審核的提案。
+          </p>
+        )}
+      </section>
+      {/* ================================= */}
       {settings && (
         <div className="fixed inset-0 grid place-items-center bg-maker-ink/40 p-4">
           <form

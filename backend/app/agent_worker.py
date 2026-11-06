@@ -20,6 +20,62 @@ from .db import SessionLocal
 from .models import AgentRun, AgentRunCheckpoint, Goal, Strategy
 from .schemas import ContentDraftGenerateRequest
 
+import asyncio
+from datetime import datetime, timezone
+from sqlalchemy import select
+from app.models import ExecutionAction, ApprovalRequest
+from app.services.publisher_service import InstagramPublisherService
+
+def process_scheduled_publishing(db: Session) -> str | None:
+    """檢查已核准且到達發布時間的 Action，由 worker 執行發布"""
+    now = datetime.now(timezone.utc)
+    
+    # 取出已核准的 action
+    actions = db.scalars(
+        select(ExecutionAction)
+        .where(
+            ExecutionAction.status == "APPROVED",
+            ExecutionAction.tool == "meta_api",
+            ExecutionAction.operation == "instagram_publish"
+        )
+        .with_for_update(skip_locked=True)
+    ).all()
+
+    for action in actions:
+        # 若有排程時間，檢查是否已到期
+        scheduled_at_str = action.payload.get("scheduled_at")
+        if scheduled_at_str:
+            scheduled_at = datetime.fromisoformat(scheduled_at_str.replace("Z", "+00:00"))
+            if scheduled_at > now:
+                continue  # 時間未到
+
+        # 取得最新對應的 approval
+        approval = db.scalar(
+            select(ApprovalRequest)
+            .where(
+                ApprovalRequest.workspace_id == action.workspace_id,
+                ApprovalRequest.action_id == action.id,
+                ApprovalRequest.draft_version == action.draft_version,
+            )
+            .order_by(ApprovalRequest.id.desc())
+        )
+
+        action.status = "EXECUTING"
+        db.commit()
+
+        try:
+            # 呼叫受控發布
+            external_id = asyncio.run(
+                InstagramPublisherService.publish_action(db, action, approval)
+            )
+            return f"Action {action.id} published successfully as {external_id}"
+        except Exception as exc:
+            action.status = "FAILED"
+            db.commit()
+            print(f"Action {action.id} publishing failed: {exc}")
+            return f"Action {action.id} failed"
+
+    return None
 
 def claim_next_run(db: Session) -> AgentRun | None:
     """Claim a waiting or stale run, skipping another worker's row lock."""
@@ -178,12 +234,17 @@ def main() -> None:
     parser.add_argument("--once", action="store_true", help="Process at most one run.")
     args = parser.parse_args()
     while True:
+        with SessionLocal() as db:
+            pub_result = process_scheduled_publishing(db)
+            if pub_result:
+                print(pub_result, flush=True)
+
         run_id = process_one_run()
         if run_id:
             print(f"Processed Agent run: {run_id}", flush=True)
         if args.once:
             return
-        if run_id is None:
+        if run_id is None and pub_result is None:
             time.sleep(settings.agent_worker_poll_seconds)
 
 

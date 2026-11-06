@@ -171,3 +171,27 @@ class Observation(TenantRow, Base):
         ForeignKeyConstraint(["workspace_id", "execution_id"], ["executions.workspace_id", "executions.id"]),
         UniqueConstraint("workspace_id", "external_event_id", "metric", "observed_at", name="uq_observation_source_metric"),
     )
+
+class ApprovalRequest(TenantRow, Base):
+    __tablename__ = "approval_requests"
+    action_id: Mapped[int] = mapped_column(BigInteger)
+    draft_version: Mapped[int] = mapped_column(Integer)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), server_default="PENDING_REVIEW")
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+    requested_by: Mapped[str] = mapped_column(String(255), server_default="admin")
+    reviewed_by: Mapped[str | None] = mapped_column(String(255))
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "action_id"],
+            ["execution_actions.workspace_id", "execution_actions.id"],
+            name="fk_approval_action_tenant",
+        ),
+        CheckConstraint(
+            "status IN ('PENDING_REVIEW', 'APPROVED', 'REJECTED', 'EXPIRED')",
+            name="ck_approval_status",
+        ),
+    )
