@@ -347,7 +347,11 @@ class PlatformTests(unittest.TestCase):
             f"/agent/runs/{first_run['run_id']}", headers=self.headers
         ).json()
         first_strategy_id = first["output_payload"]["strategy_id"]
-        first_content_run_id = first["output_payload"]["content_draft_run_id"]
+        first_content_run_id = self.client.post(
+            f"/strategies/{first_strategy_id}/content-draft-runs",
+            headers=self.headers,
+            json={"channel": "instagram", "content_format": "carousel"},
+        ).json()["run_id"]
         self.assertEqual(process_one_run(first_content_run_id), first_content_run_id)
 
         second_run = create_run()
@@ -356,7 +360,11 @@ class PlatformTests(unittest.TestCase):
             f"/agent/runs/{second_run['run_id']}", headers=self.headers
         ).json()
         second_strategy_id = second["output_payload"]["strategy_id"]
-        second_content_run_id = second["output_payload"]["content_draft_run_id"]
+        second_content_run_id = self.client.post(
+            f"/strategies/{second_strategy_id}/content-draft-runs",
+            headers=self.headers,
+            json={"channel": "instagram", "content_format": "carousel"},
+        ).json()["run_id"]
         self.assertEqual(process_one_run(second_content_run_id), second_content_run_id)
 
         self.assertNotEqual(first_strategy_id, second_strategy_id)

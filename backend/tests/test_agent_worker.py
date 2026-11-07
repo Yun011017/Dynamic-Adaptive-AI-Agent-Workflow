@@ -105,30 +105,22 @@ class AgentWorkerTests(unittest.TestCase):
         self.assertEqual(output["content_draft_action_id"], 44)
         self.assertTrue(output["content_draft"]["carousel"])
 
-    def test_strategy_result_automatically_queues_content_draft_work(self):
+    def test_strategy_result_keeps_content_draft_creation_manual(self):
         row = SimpleNamespace(
             id=1, run_id="strategy-run", workspace_id=7, agent_provider="local",
             agent_model="deterministic-langgraph", input_payload={"goal": "test", "goal_id": 3},
             goal_id=3,
             attempts=1, output_payload=None, error_code=None, status="RUNNING",
         )
-        queued = SimpleNamespace(run_id="content-run")
         with patch.object(self.worker, "SessionLocal") as session, \
              patch.object(self.worker, "claim_next_run", return_value=row), \
              patch.object(self.worker, "checkpoint"), \
              patch.object(self.worker, "sync_once", return_value={"read": 0, "inserted": 0, "skipped": 0}), \
              patch.object(self.worker, "load_strategy_context", return_value=([], {"form_response_ids": [], "observation_ids": [], "external_event_ids": []})), \
              patch.object(self.worker, "save_strategy", return_value=SimpleNamespace(id=12, version=1, content="{}")), \
-             patch.object(self.worker, "run_agent", return_value={"strategy_id": 12, "reason": "strategy"}), \
-             patch.object(self.worker, "queue_content_draft_run", return_value=queued) as queue:
+             patch.object(self.worker, "run_agent", return_value={"strategy_id": 12, "reason": "strategy"}):
             session.return_value.__enter__.return_value = MagicMock()
             self.assertEqual(self.worker.process_one_run(), "strategy-run")
         self.assertEqual(row.status, "COMPLETED")
-        self.assertEqual(row.output_payload["content_draft_run_id"], "content-run")
-        queue.assert_called_once_with(
-            session.return_value.__enter__.return_value,
-            workspace_id=7,
-            strategy_id=12,
-            provider="local",
-            model_name="deterministic-langgraph",
-        )
+        self.assertEqual(row.output_payload["strategy_id"], 12)
+        self.assertNotIn("content_draft_run_id", row.output_payload)

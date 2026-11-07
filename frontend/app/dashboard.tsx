@@ -282,13 +282,45 @@ export default function Dashboard() {
   }
   function openRun(run) {
     setSelected(run.run_id);
-    const strategyId = run.output_payload?.strategy_id;
+    const strategyId = strategyIdForRun(run);
     if (typeof strategyId === "number") {
       setSelectedStrategy(strategyId);
       setEditingDraft(null);
       setDraftForm(blankDraft);
     }
     resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  function strategyIdForRun(run) {
+    const directId = run.output_payload?.strategy_id;
+    if (typeof directId === "number") return directId;
+
+    // Some earlier saved runs predate strategy_id in output_payload. Recover
+    // their persisted Strategy through the same Goal and saved version.
+    const goalId = run.goal_id ?? run.input_payload?.goal_id;
+    if (typeof goalId !== "number") return null;
+    const version = run.output_payload?.strategy_version;
+    const matches = strategies
+      .filter((strategy) => strategy.goal_id === goalId)
+      .sort((a, b) => b.version - a.version || b.id - a.id);
+    return (typeof version === "number"
+      ? matches.find((strategy) => strategy.version === version)
+      : matches[0])?.id ?? null;
+  }
+  function startContentProposal(run) {
+    const strategyId = strategyIdForRun(run);
+    if (!strategyId) {
+      setError("此策略工作尚未保存可用的 Strategy；請重新整理後再試。");
+      return;
+    }
+    setSelectedStrategy(strategyId);
+    setEditingDraft(null);
+    setDraftForm(blankDraft);
+    requestAnimationFrame(() => {
+      document.getElementById("content-drafts")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
   }
   async function regenerateStrategy(run) {
     const payload = run?.input_payload;
@@ -746,14 +778,29 @@ export default function Dashboard() {
                   <p className="m-0 text-sm text-maker-muted">
                     Strategy v{current.output_payload.strategy_version}
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => regenerateStrategy(current)}
-                    className="rounded-lg bg-maker-blue px-3 py-2 text-sm font-semibold text-white"
-                  >
-                    重新產生 Strategy
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => startContentProposal(current)}
+                      disabled={!strategyIdForRun(current)}
+                      className="rounded-lg bg-orange-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-orange-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      建立 Instagram 內容提案
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => regenerateStrategy(current)}
+                      className="rounded-lg bg-maker-blue px-3 py-2 text-sm font-semibold text-white"
+                    >
+                      重新產生 Strategy
+                    </button>
+                  </div>
                 </div>
+                {!strategyIdForRun(current) && (
+                  <p className="mb-4 text-sm text-maker-muted">
+                    此紀錄尚未對應到已保存的 Strategy；重新整理後可再試一次。
+                  </p>
+                )}
                 <div className="grid gap-4 md:grid-cols-2">
                   <Card
                     title="目標受眾"

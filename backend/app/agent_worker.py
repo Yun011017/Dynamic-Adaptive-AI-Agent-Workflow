@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 
 from .agent_runner import run_agent
 from .content_drafts import create_content_draft
-from .content_draft_jobs import queue_content_draft_run
 from .content_generator import generate_content_draft
 from .form_sync import sync_once
 from .config import settings
@@ -303,19 +302,6 @@ def process_one_run(run_id: str | None = None) -> str | None:
                     "strategy": json.loads(strategy.content),
                     "data_source": source_refs,
                 }
-                # When the Strategy producer persists its formal record and
-                # exposes strategy_id, automatically queue the next bounded
-                # job. The new job creates the carousel draft separately.
-                strategy_id = output.get("strategy_id")
-                if isinstance(strategy_id, int) and not isinstance(strategy_id, bool):
-                    content_run = queue_content_draft_run(
-                        db,
-                        workspace_id=workspace_id,
-                        strategy_id=strategy_id,
-                        provider=provider,
-                        model_name=model_name,
-                    )
-                    output["content_draft_run_id"] = content_run.run_id
             row.output_payload = output
             row.status = "COMPLETED"
         except Exception:
