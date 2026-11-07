@@ -367,6 +367,9 @@ def save_legacy_run_strategy(run_id: str, db: DB, tenant: Tenant):
         db.add(goal)
         db.flush()
     run.goal_id = goal.id
+    input_payload = dict(run.input_payload)
+    input_payload["goal_id"] = goal.id
+    run.input_payload = input_payload
 
     latest_version = db.scalar(
         select(Strategy.version)

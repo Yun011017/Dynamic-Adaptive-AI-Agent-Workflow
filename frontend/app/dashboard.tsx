@@ -161,6 +161,14 @@ export default function Dashboard() {
     setGoals(goalValues);
     setSelectedStrategy((selected) => selected ?? strategyValues[0]?.id ?? null);
     setConnection(true);
+    return strategyValues;
+  };
+  const latestStrategyId = (strategyId, values = strategies) => {
+    const strategy = values.find((item) => item.id === strategyId);
+    if (!strategy) return strategyId;
+    return values
+      .filter((item) => item.goal_id === strategy.goal_id)
+      .sort((a, b) => b.version - a.version || b.id - a.id)[0]?.id ?? strategyId;
   };
   const loadScheduledDrafts = async () => {
     if (!key) {
@@ -237,6 +245,7 @@ export default function Dashboard() {
     ) {
       finished.current.add(run.run_id);
       resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      loadHistory().catch(() => setError("Strategy 已完成，但無法更新策略清單。"));
     }
   }, [runs, selected]);
   async function save(event) {
@@ -289,7 +298,11 @@ export default function Dashboard() {
     resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     const strategyId = await ensureStrategyForRun(run);
     if (typeof strategyId === "number") {
-      setSelectedStrategy(strategyId);
+      // A newly completed regeneration may not be in the selector's previous
+      // list yet. Refresh before setting its value so the native select can
+      // render Strategy v2 instead of falling back to the first option.
+      const refreshedStrategies = await loadHistory();
+      setSelectedStrategy(latestStrategyId(strategyId, refreshedStrategies));
       setEditingDraft(null);
       setDraftForm(blankDraft);
     }
@@ -338,7 +351,8 @@ export default function Dashboard() {
     setError("");
     const strategyId = await ensureStrategyForRun(run);
     if (!strategyId) return;
-    setSelectedStrategy(strategyId);
+    const refreshedStrategies = await loadHistory();
+    setSelectedStrategy(latestStrategyId(strategyId, refreshedStrategies));
     setEditingDraft(null);
     setDraftForm(blankDraft);
     requestAnimationFrame(() => {
@@ -350,13 +364,14 @@ export default function Dashboard() {
   }
   async function regenerateStrategy(run) {
     const payload = run?.input_payload;
-    if (!payload?.goal_id) return setError("這筆工作沒有可沿用的活動目標。");
+    const goalId = run?.goal_id ?? payload?.goal_id;
+    if (!goalId) return setError("這筆工作沒有可沿用的活動目標。");
     setError("");
     try {
       const nextRun = await call("/agent/runs", {
         method: "POST",
         body: JSON.stringify({
-          goal_id: payload.goal_id,
+          goal_id: goalId,
           goal: payload.goal,
           context: payload.context || "",
           constraints: payload.constraints || {},
@@ -571,6 +586,17 @@ export default function Dashboard() {
   const legacyStrategyRuns = strategyRuns.filter(
     (run) => run.status === "COMPLETED" && !strategyIdForRun(run),
   );
+  const selectableStrategies = Object.values(
+    strategies.reduce((latest, strategy) => {
+      const current = latest[strategy.goal_id];
+      if (!current || strategy.version > current.version || (
+        strategy.version === current.version && strategy.id > current.id
+      )) {
+        latest[strategy.goal_id] = strategy;
+      }
+      return latest;
+    }, {} as Record<number, Strategy>),
+  ) as Strategy[];
   const activeDrafts = drafts.filter((draft) => !["SUPERSEDED", "EXECUTING", "SUCCEEDED"].includes(draft.status));
   const revisionHistory = editingDraft
     ? drafts
@@ -916,7 +942,7 @@ export default function Dashboard() {
             選擇 Strategy
             <select
               className="input mt-1.5"
-              value={selectedStrategy ?? ""}
+              value={selectedStrategy ? latestStrategyId(selectedStrategy) : ""}
               onChange={async (event) => {
                 const value = event.target.value;
                 if (!value) {
@@ -933,15 +959,15 @@ export default function Dashboard() {
                   if (strategyId) setSelectedStrategy(strategyId);
                   return;
                 }
-                setSelectedStrategy(Number(value));
+                setSelectedStrategy(latestStrategyId(Number(value)));
               }}
             >
-              {!strategies.length && !legacyStrategyRuns.length && (
+              {!selectableStrategies.length && !legacyStrategyRuns.length && (
                 <option value="">尚無可用 Strategy</option>
               )}
-              {strategies.map((strategy) => (
+              {selectableStrategies.map((strategy) => (
                 <option key={strategy.id} value={strategy.id}>
-                  {goals.find((goal) => goal.id === strategy.goal_id)?.title || `Goal ${strategy.goal_id}`} · v{strategy.version}
+                  {goals.find((goal) => goal.id === strategy.goal_id)?.title || `Goal ${strategy.goal_id}`}
                 </option>
               ))}
               {legacyStrategyRuns.map((run) => (

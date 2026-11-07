@@ -211,6 +211,7 @@ class PlatformTests(unittest.TestCase):
         output = response.json()["output_payload"]
         self.assertIsInstance(output["strategy_id"], int)
         self.assertEqual(output["strategy_version"], 1)
+        self.assertEqual(response.json()["input_payload"]["goal_id"], output["goal_id"])
         repeated = self.client.post(
             f"/agent/runs/{legacy_run_id}/strategies", headers=self.headers
         )
