@@ -308,9 +308,8 @@ export default function Dashboard() {
       ? matches.find((strategy) => strategy.version === version)
       : matches[0])?.id ?? null;
   }
-  async function startContentProposal(run) {
+  async function ensureStrategyForRun(run) {
     let strategyId = strategyIdForRun(run);
-    setError("");
     try {
       if (!strategyId) {
         const savedRun = await call(`/agent/runs/${run.run_id}/strategies`, {
@@ -327,8 +326,14 @@ export default function Dashboard() {
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "無法保存舊的 Strategy 紀錄。");
-      return;
+      return null;
     }
+    return strategyId;
+  }
+  async function startContentProposal(run) {
+    setError("");
+    const strategyId = await ensureStrategyForRun(run);
+    if (!strategyId) return;
     setSelectedStrategy(strategyId);
     setEditingDraft(null);
     setDraftForm(blankDraft);
@@ -539,6 +544,9 @@ export default function Dashboard() {
   const canStartContentProposal = current?.status === "COMPLETED";
   const strategyRuns = runs.filter(
     (run) => run.input_payload.job_type !== "CONTENT_DRAFT",
+  );
+  const legacyStrategyRuns = strategyRuns.filter(
+    (run) => run.status === "COMPLETED" && !strategyIdForRun(run),
   );
   const activeDrafts = drafts.filter((draft) => !["SUPERSEDED", "EXECUTING", "SUCCEEDED"].includes(draft.status));
   const revisionHistory = editingDraft
@@ -871,14 +879,36 @@ export default function Dashboard() {
             <select
               className="input mt-1.5"
               value={selectedStrategy ?? ""}
-              onChange={(event) =>
-                setSelectedStrategy(event.target.value ? Number(event.target.value) : null)
-              }
+              onChange={async (event) => {
+                const value = event.target.value;
+                if (!value) {
+                  setSelectedStrategy(null);
+                  return;
+                }
+                if (value.startsWith("legacy:")) {
+                  const run = legacyStrategyRuns.find(
+                    (item) => item.run_id === value.slice("legacy:".length),
+                  );
+                  if (!run) return;
+                  setError("");
+                  const strategyId = await ensureStrategyForRun(run);
+                  if (strategyId) setSelectedStrategy(strategyId);
+                  return;
+                }
+                setSelectedStrategy(Number(value));
+              }}
             >
-              {!strategies.length && <option value="">尚無可用 Strategy</option>}
+              {!strategies.length && !legacyStrategyRuns.length && (
+                <option value="">尚無可用 Strategy</option>
+              )}
               {strategies.map((strategy) => (
                 <option key={strategy.id} value={strategy.id}>
                   {goals.find((goal) => goal.id === strategy.goal_id)?.title || `Goal ${strategy.goal_id}`} · v{strategy.version}
+                </option>
+              ))}
+              {legacyStrategyRuns.map((run) => (
+                <option key={run.run_id} value={`legacy:${run.run_id}`}>
+                  {run.input_payload.goal || "未命名策略工作"} · 待保存
                 </option>
               ))}
             </select>
