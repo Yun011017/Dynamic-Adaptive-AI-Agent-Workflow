@@ -1,4 +1,5 @@
 import hmac
+import json
 import uuid
 from typing import Annotated
 
@@ -283,6 +284,97 @@ def get_agent_run(run_id: str, db: DB, tenant: Tenant):
     if row is None:
         raise HTTPException(404, "Agent run not found")
     return row
+
+
+@app.post("/agent/runs/{run_id}/strategies", response_model=AgentRunRead)
+def save_legacy_run_strategy(run_id: str, db: DB, tenant: Tenant):
+    """Backfill a formal Strategy for an older completed analysis run.
+
+    Historical runs may contain useful output but predate goal/strategy links.
+    Persist their existing analysis without rerunning the Agent, so it can enter
+    the normal content-draft workflow.
+    """
+    run = read_with_retry(
+        lambda: db.scalar(
+            select(AgentRun).where(
+                AgentRun.run_id == run_id,
+                AgentRun.workspace_id == tenant,
+            )
+        ),
+        reset=db.rollback,
+    )
+    if run is None:
+        raise HTTPException(404, "Resource not found")
+    if run.status != "COMPLETED" or not run.output_payload:
+        raise HTTPException(409, "Only completed analysis runs can create a Strategy")
+    if run.input_payload.get("job_type") == "CONTENT_DRAFT":
+        raise HTTPException(409, "Content draft runs cannot create a Strategy")
+
+    output = dict(run.output_payload)
+    strategy_id = output.get("strategy_id")
+    if isinstance(strategy_id, int) and not isinstance(strategy_id, bool):
+        strategy = db.scalar(
+            select(Strategy).where(
+                Strategy.id == strategy_id,
+                Strategy.workspace_id == tenant,
+            )
+        )
+        if strategy is not None:
+            return run
+
+    goal = None
+    if run.goal_id is not None:
+        goal = db.scalar(
+            select(Goal).where(Goal.id == run.goal_id, Goal.workspace_id == tenant)
+        )
+    goal_title = str(run.input_payload.get("goal") or "歷史策略工作").strip() or "歷史策略工作"
+    if goal is None:
+        goal = db.scalar(
+            select(Goal)
+            .where(Goal.workspace_id == tenant, Goal.title == goal_title)
+            .order_by(Goal.id.desc())
+        )
+    if goal is None:
+        goal = Goal(
+            workspace_id=tenant,
+            title=goal_title,
+            description=run.input_payload.get("context") or None,
+            constraints=run.input_payload.get("constraints") or {},
+        )
+        db.add(goal)
+        db.flush()
+    run.goal_id = goal.id
+
+    latest_version = db.scalar(
+        select(Strategy.version)
+        .where(Strategy.workspace_id == tenant, Strategy.goal_id == goal.id)
+        .order_by(Strategy.version.desc())
+        .limit(1)
+    ) or 0
+    strategy_fields = {
+        key: output.get(key)
+        for key in ("target_audience", "content_direction", "channel", "expected_metrics", "reason")
+    }
+    strategy_fields["data_source"] = output.get("data_source") or {}
+    strategy = Strategy(
+        workspace_id=tenant,
+        goal_id=goal.id,
+        version=latest_version + 1,
+        content=json.dumps(strategy_fields, ensure_ascii=False, sort_keys=True),
+        rationale=output.get("reason"),
+    )
+    db.add(strategy)
+    db.flush()
+    output.update({
+        "strategy_id": strategy.id,
+        "goal_id": goal.id,
+        "strategy_version": strategy.version,
+        "strategy": strategy_fields,
+    })
+    run.output_payload = output
+    db.commit()
+    db.refresh(run)
+    return run
 
 from app.models import ApprovalRequest
 from app.schemas import ApprovalDecisionRequest, ApprovalRequestRead

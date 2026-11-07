@@ -308,10 +308,25 @@ export default function Dashboard() {
       ? matches.find((strategy) => strategy.version === version)
       : matches[0])?.id ?? null;
   }
-  function startContentProposal(run) {
-    const strategyId = strategyIdForRun(run);
-    if (!strategyId) {
-      setError("此策略工作尚未保存可用的 Strategy；請重新整理後再試。");
+  async function startContentProposal(run) {
+    let strategyId = strategyIdForRun(run);
+    setError("");
+    try {
+      if (!strategyId) {
+        const savedRun = await call(`/agent/runs/${run.run_id}/strategies`, {
+          method: "POST",
+        });
+        strategyId = savedRun.output_payload?.strategy_id;
+        if (typeof strategyId !== "number") {
+          throw new Error("無法建立此紀錄對應的 Strategy。");
+        }
+        setRuns((all) => all.map((item) =>
+          item.run_id === savedRun.run_id ? savedRun : item,
+        ));
+        await loadHistory();
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "無法保存舊的 Strategy 紀錄。");
       return;
     }
     setSelectedStrategy(strategyId);
@@ -521,9 +536,7 @@ export default function Dashboard() {
     beginRevision(draft);
   }
   const current = runs.find((run) => run.run_id === selected);
-  const currentStrategyId = current ? strategyIdForRun(current) : null;
-  const canStartContentProposal = Boolean(currentStrategyId)
-    && current?.status === "COMPLETED";
+  const canStartContentProposal = current?.status === "COMPLETED";
   const strategyRuns = runs.filter(
     (run) => run.input_payload.job_type !== "CONTENT_DRAFT",
   );
@@ -808,9 +821,7 @@ export default function Dashboard() {
                 </div>
                 {!canStartContentProposal && (
                   <p className="mb-4 text-sm text-maker-muted">
-                    {current.status === "COMPLETED"
-                      ? "此舊紀錄尚未對應到已保存的 Strategy；重新整理後可再試一次。"
-                      : "Strategy 完成並保存後，才可以建立 Instagram 內容提案。"}
+                    Strategy 完成並保存後，才可以建立 Instagram 內容提案。
                   </p>
                 )}
                 <div className="grid gap-4 md:grid-cols-2">

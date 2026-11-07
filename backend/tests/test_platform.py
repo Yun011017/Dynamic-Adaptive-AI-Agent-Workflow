@@ -185,6 +185,38 @@ class PlatformTests(unittest.TestCase):
             phases = [checkpoint.phase for checkpoint in db.query(AgentRunCheckpoint).order_by(AgentRunCheckpoint.sequence).all()]
             self.assertEqual(phases, ["RUNNING", "COMPLETED"])
 
+    def test_10b_completed_legacy_run_can_be_saved_as_strategy(self):
+        legacy_run_id = "legacy-" + secrets.token_hex(12)
+        with SessionLocal.begin() as db:
+            workspace_id = db.query(Workspace).filter_by(slug="development").one().id
+            db.add(AgentRun(
+                workspace_id=workspace_id,
+                run_id=legacy_run_id,
+                status="COMPLETED",
+                input_payload={
+                    "goal": "Legacy workshop goal",
+                    "context": "Saved historical context",
+                    "constraints": {"channel": "instagram"},
+                },
+                output_payload={
+                    "target_audience": "students",
+                    "content_direction": "workshop invitation",
+                    "reason": "historical analysis",
+                },
+            ))
+        response = self.client.post(
+            f"/agent/runs/{legacy_run_id}/strategies", headers=self.headers
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        output = response.json()["output_payload"]
+        self.assertIsInstance(output["strategy_id"], int)
+        self.assertEqual(output["strategy_version"], 1)
+        repeated = self.client.post(
+            f"/agent/runs/{legacy_run_id}/strategies", headers=self.headers
+        )
+        self.assertEqual(repeated.status_code, 200, repeated.text)
+        self.assertEqual(repeated.json()["output_payload"]["strategy_id"], output["strategy_id"])
+
 
     def test_11_form_ingestion_is_idempotent(self):
         from app.form_sync import parse_responses, save_responses, PROVIDER
