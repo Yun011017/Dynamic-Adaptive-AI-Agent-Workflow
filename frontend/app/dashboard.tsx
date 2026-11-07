@@ -296,7 +296,9 @@ export default function Dashboard() {
 
     // Some earlier saved runs predate strategy_id in output_payload. Recover
     // their persisted Strategy through the same Goal and saved version.
-    const goalId = run.goal_id ?? run.input_payload?.goal_id;
+    const goalId = run.goal_id
+      ?? run.input_payload?.goal_id
+      ?? goals.find((goal) => goal.title === run.input_payload?.goal)?.id;
     if (typeof goalId !== "number") return null;
     const version = run.output_payload?.strategy_version;
     const matches = strategies
@@ -519,6 +521,9 @@ export default function Dashboard() {
     beginRevision(draft);
   }
   const current = runs.find((run) => run.run_id === selected);
+  const currentStrategyId = current ? strategyIdForRun(current) : null;
+  const canStartContentProposal = Boolean(currentStrategyId)
+    && current?.status === "COMPLETED";
   const strategyRuns = runs.filter(
     (run) => run.input_payload.job_type !== "CONTENT_DRAFT",
   );
@@ -725,7 +730,10 @@ export default function Dashboard() {
                     className={`w-full rounded-xl border p-4 text-left ${selected === run.run_id ? "border-[#89a9cc] bg-[#edf3f8]" : "border-maker-line hover:bg-stone-50"}`}
                   >
                     <span className="flex items-center justify-between gap-2">
-                      <strong className="truncate">
+                      <strong
+                        className="min-w-0 flex-1 truncate pr-2"
+                        title={run.input_payload.goal}
+                      >
                         {run.input_payload.goal}
                       </strong>
                       <Pill status={run.status} />
@@ -782,10 +790,12 @@ export default function Dashboard() {
                     <button
                       type="button"
                       onClick={() => startContentProposal(current)}
-                      disabled={!strategyIdForRun(current)}
+                      disabled={!canStartContentProposal}
                       className="rounded-lg bg-orange-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-orange-800 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      建立 Instagram 內容提案
+                      {current.status === "COMPLETED"
+                        ? "建立 Instagram 內容提案"
+                        : "等待 Strategy 完成"}
                     </button>
                     <button
                       type="button"
@@ -796,9 +806,11 @@ export default function Dashboard() {
                     </button>
                   </div>
                 </div>
-                {!strategyIdForRun(current) && (
+                {!canStartContentProposal && (
                   <p className="mb-4 text-sm text-maker-muted">
-                    此紀錄尚未對應到已保存的 Strategy；重新整理後可再試一次。
+                    {current.status === "COMPLETED"
+                      ? "此舊紀錄尚未對應到已保存的 Strategy；重新整理後可再試一次。"
+                      : "Strategy 完成並保存後，才可以建立 Instagram 內容提案。"}
                   </p>
                 )}
                 <div className="grid gap-4 md:grid-cols-2">
