@@ -99,6 +99,12 @@ class ContentDraftCreate(BaseModel):
             raise ValueError("A carousel needs at least two image requirements")
         if self.carousel and self.image_urls and len(self.image_urls) < 2:
             raise ValueError("A carousel needs at least two public image URLs when URLs are supplied")
+        if self.schedule_requested:
+            required_images = 2 if self.carousel else 1
+            if len(self.image_urls) < required_images:
+                if self.carousel:
+                    raise ValueError("輪播排程需要至少兩張不同的公開 HTTPS 圖片網址")
+                raise ValueError("排程需要至少一張公開 HTTPS 圖片網址")
         return self
 
 

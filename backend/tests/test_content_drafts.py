@@ -1,9 +1,32 @@
 import unittest
+from datetime import datetime, timedelta, timezone
+
+from pydantic import ValidationError
 
 from app.content_drafts import meta_adapter_payload
+from app.schemas import ContentDraftCreate
 
 
 class MetaAdapterPayloadTests(unittest.TestCase):
+    def test_scheduled_single_post_requires_an_image(self):
+        with self.assertRaises(ValidationError):
+            ContentDraftCreate(
+                caption="Build with us",
+                scheduled_at=datetime.now(timezone.utc) + timedelta(days=1),
+                schedule_requested=True,
+            )
+
+    def test_scheduled_carousel_requires_two_images(self):
+        with self.assertRaises(ValidationError):
+            ContentDraftCreate(
+                caption="Build with us",
+                carousel=True,
+                image_requirements=["Cover", "Project"],
+                image_urls=["https://images.example.test/cover.jpg"],
+                scheduled_at=datetime.now(timezone.utc) + timedelta(days=1),
+                schedule_requested=True,
+            )
+
     def test_single_image_payload(self):
         payload = meta_adapter_payload(
             caption="Build with us",

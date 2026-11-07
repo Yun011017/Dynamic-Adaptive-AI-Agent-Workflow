@@ -15,7 +15,7 @@ from .config import settings
 from .content_draft_jobs import queue_content_draft_run
 from .db import engine, get_db
 from .content_drafts import create_content_draft, create_content_draft_version
-from .models import AgentRun, Execution, ExecutionAction, Goal, Strategy, Workspace
+from .models import AgentRun, AgentRunCheckpoint, Execution, ExecutionAction, Goal, Strategy, Workspace
 from .retry import read_with_retry
 from .schemas import AgentRunCreate, AgentRunRead, ContentDraftCreate, ContentDraftGenerateRequest, ContentDraftRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead
 
@@ -27,7 +27,7 @@ app.add_middleware(
     # Production origins remain explicitly controlled by FRONTEND_ORIGINS.
     allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
 bearer = HTTPBearer(auto_error=False)
@@ -284,6 +284,29 @@ def get_agent_run(run_id: str, db: DB, tenant: Tenant):
     if row is None:
         raise HTTPException(404, "Agent run not found")
     return row
+
+
+@app.delete("/agent/runs/{run_id}", status_code=204)
+def delete_agent_run(run_id: str, db: DB, tenant: Tenant):
+    """Remove one history record without deleting its saved Strategy or drafts."""
+    row = read_with_retry(
+        lambda: db.scalar(
+            select(AgentRun).where(
+                AgentRun.run_id == run_id, AgentRun.workspace_id == tenant
+            )
+        ),
+        reset=db.rollback,
+    )
+    if row is None:
+        raise HTTPException(404, "Agent run not found")
+    if row.status in {"PENDING", "RUNNING"}:
+        raise HTTPException(409, "A running work record cannot be deleted")
+    db.query(AgentRunCheckpoint).filter(
+        AgentRunCheckpoint.workspace_id == tenant,
+        AgentRunCheckpoint.agent_run_id == row.id,
+    ).delete(synchronize_session=False)
+    db.delete(row)
+    db.commit()
 
 
 @app.post("/agent/runs/{run_id}/strategies", response_model=AgentRunRead)

@@ -142,8 +142,12 @@ export default function Dashboard() {
       },
     });
     const body = await response.json().catch(() => ({}));
-    if (!response.ok)
-      throw new Error(body.detail || body.error?.message || "後端請求失敗。");
+    if (!response.ok) {
+      const detail = Array.isArray(body.detail)
+        ? body.detail.map((item) => item.msg || "資料格式不正確").join("；")
+        : body.detail;
+      throw new Error(detail || body.error?.message || "後端請求失敗。");
+    }
     return body;
   };
   const loadHistory = async () => {
@@ -280,15 +284,15 @@ export default function Dashboard() {
       setError(cause.message);
     }
   }
-  function openRun(run) {
+  async function openRun(run) {
     setSelected(run.run_id);
-    const strategyId = strategyIdForRun(run);
+    resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const strategyId = await ensureStrategyForRun(run);
     if (typeof strategyId === "number") {
       setSelectedStrategy(strategyId);
       setEditingDraft(null);
       setDraftForm(blankDraft);
     }
-    resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
   function strategyIdForRun(run) {
     const directId = run.output_payload?.strategy_id;
@@ -367,10 +371,29 @@ export default function Dashboard() {
       setError(cause instanceof Error ? cause.message : "無法重新產生 Strategy。");
     }
   }
+  async function deleteStrategyRun(run) {
+    if (!window.confirm("確定刪除這筆策略工作紀錄嗎？已保存的 Strategy、內容提案與排程不會受影響。")) {
+      return;
+    }
+    setError("");
+    try {
+      await call(`/agent/runs/${run.run_id}`, { method: "DELETE" });
+      setRuns((all) => all.filter((item) => item.run_id !== run.run_id));
+      if (selected === run.run_id) setSelected(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "無法刪除策略工作紀錄。");
+    }
+  }
   async function saveDraft(scheduleRequested = draftForm.scheduleRequested) {
     if (!selectedStrategy) return setError("請先選擇一筆 Strategy。");
     if (!draftForm.title.trim()) return setError("請填寫提案名稱。");
     if (!draftForm.caption.trim()) return setError("請填寫貼文文案。");
+    if (uniqueDraftImageUrls.length !== draftImageUrls.length) {
+      return setError("圖片網址不可重複，請填寫不同的公開 HTTPS 圖片網址。");
+    }
+    if (draftForm.carousel && draftImageUrls.length > 0 && uniqueDraftImageUrls.length < 2) {
+      return setError("輪播貼文有填圖片時，至少需要兩張不同的公開 HTTPS 圖片網址。");
+    }
     if (scheduleRequested && !draftForm.scheduledAt) {
       return setError("建立排程前，請先設定預計發布時間。");
     }
@@ -562,13 +585,16 @@ export default function Dashboard() {
   const draftImageUrls = draftForm.imageUrls
     .split("\n")
     .filter((value) => value.trim());
+  const uniqueDraftImageUrls = [...new Set(draftImageUrls.map((url) => url.trim()))];
   const scheduleMissing = [
     !draftForm.title.trim() && "提案名稱",
     !draftForm.caption.trim() && "Instagram 文案",
     !hasFutureScheduleTime && "未來的發布時間",
     draftForm.carousel && draftImageRequirements.length < 2 && "至少兩項輪播素材需求",
     draftImageUrls.some((url) => !url.startsWith("https://")) && "有效的公開 HTTPS 圖片網址",
-    draftForm.carousel && draftImageUrls.length > 0 && draftImageUrls.length < 2 && "至少兩張輪播圖片網址",
+    uniqueDraftImageUrls.length !== draftImageUrls.length && "圖片網址不可重複",
+    draftForm.carousel && uniqueDraftImageUrls.length < 2 && "至少兩張公開 HTTPS 圖片網址",
+    !draftForm.carousel && uniqueDraftImageUrls.length < 1 && "至少一張公開 HTTPS 圖片網址",
   ].filter(Boolean) as string[];
   const canCreateSchedule = scheduleMissing.length === 0;
 
@@ -745,24 +771,36 @@ export default function Dashboard() {
           {strategyRuns.length ? (
             <ol className="m-0 grid max-h-[34rem] list-none gap-3 overflow-y-auto pr-2 p-0">
               {strategyRuns.map((run) => (
-                <li key={run.run_id}>
-                  <button
-                    onClick={() => openRun(run)}
-                    className={`w-full rounded-xl border p-4 text-left ${selected === run.run_id ? "border-[#89a9cc] bg-[#edf3f8]" : "border-maker-line hover:bg-stone-50"}`}
-                  >
-                    <span className="flex items-center justify-between gap-2">
+                <li
+                  key={run.run_id}
+                  className={`overflow-hidden rounded-xl border ${selected === run.run_id ? "border-[#89a9cc] bg-[#edf3f8]" : "border-maker-line"}`}
+                >
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-start gap-3 p-4">
+                    <button
+                      onClick={() => openRun(run)}
+                      className="min-w-0 flex-1 text-left hover:opacity-75"
+                    >
                       <strong
-                        className="min-w-0 flex-1 truncate pr-2"
+                        className="block truncate pr-2"
                         title={run.input_payload.goal}
                       >
                         {run.input_payload.goal}
                       </strong>
-                      <Pill status={run.status} />
-                    </span>
-                    <small className="mt-1 block font-mono text-xs text-maker-muted">
-                      {new Date(run.created_at).toLocaleString("zh-TW")}
-                    </small>
-                  </button>
+                      <small className="mt-1 block font-mono text-xs text-maker-muted">
+                        {new Date(run.created_at).toLocaleString("zh-TW")}
+                      </small>
+                    </button>
+                    <Pill status={run.status} />
+                    {!['PENDING', 'RUNNING'].includes(run.status) && (
+                      <button
+                        type="button"
+                        onClick={() => deleteStrategyRun(run)}
+                        className="rounded-lg px-3 py-1 text-xs font-semibold text-red-700 transition hover:bg-red-50"
+                      >
+                        刪除紀錄
+                      </button>
+                    )}
+                  </div>
                 </li>
               ))}
             </ol>
