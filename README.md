@@ -40,6 +40,18 @@ npm install
 cd ..
 ```
 
+macOS 請在專案根目錄開啟「終端機」，使用以下指令：
+
+```zsh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r backend/requirements-dev.txt
+if [ ! -f backend/.env ]; then cp backend/.env.example backend/.env; fi
+if [ ! -f frontend/.env ]; then cp frontend/.env.example frontend/.env; fi
+cd frontend
+npm install
+cd ..
+```
+
 在 Neon Connect 複製連線資訊後設定：
 
 - `DATABASE_URL`：API 使用的 pooled 連線，保留 SSL 參數。
@@ -53,6 +65,12 @@ cd ..
 .venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
+macOS 產生開發金鑰：
+
+```zsh
+.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
 設定好 `backend/.env` 後，執行一次資料庫初始化：
 
 ```bat
@@ -60,6 +78,16 @@ cd backend
 ..\.venv\Scripts\python.exe -m scripts.manage migrate
 ..\.venv\Scripts\python.exe -m scripts.manage seed
 ..\.venv\Scripts\python.exe -m scripts.manage check
+cd ..
+```
+
+macOS 資料庫初始化：
+
+```zsh
+cd backend
+../.venv/bin/python -m scripts.manage migrate
+../.venv/bin/python -m scripts.manage seed
+../.venv/bin/python -m scripts.manage check
 cd ..
 ```
 
@@ -81,6 +109,23 @@ cd frontend
 npm run dev
 ```
 
+macOS 平常啟動方式：請開啟兩個「終端機」視窗。
+
+後端終端機：
+
+```zsh
+cd backend
+source ../.venv/bin/activate
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+前端終端機：
+
+```zsh
+cd frontend
+npm run dev
+```
+
 看到 `Uvicorn running on http://127.0.0.1:8000` 就代表後端已啟動。開啟 [API 文件](http://localhost:8000/docs) 與 [健康檢查](http://localhost:8000/health)；`/health` 顯示 `ok` 代表 FastAPI 已連到 Neon。按 `Ctrl+C` 可停止對應的服務。
 
 前端可建立 Agent 工作、查看背景 worker 的執行狀態與讀取完成結果。開啟 [http://localhost:3000](http://localhost:3000)，按右上角「連線設定」，填入：
@@ -97,6 +142,13 @@ GitHub Actions 排程外，若要在本機立刻處理等待中的工作，可�
 ```bat
 cd backend
 ..\.venv\Scripts\python.exe -m app.agent_worker
+```
+
+macOS 若要在本機立即處理 Agent 工作：
+
+```zsh
+cd backend
+../.venv/bin/python -m app.agent_worker
 ```
 
 前端只會呼叫 FastAPI，不會直接連 Neon。開發用 API key 只存於目前瀏覽器分頁，關閉分頁後即清除。
