@@ -83,9 +83,12 @@ jobs:
       - name: Deploy development project and verify health
         env:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          DEPLOY_DATABASE_URL: ${{ secrets.NEON_DEV_MIGRATION_DATABASE_URL }}
         run: |
           test -n "$VERCEL_AUTOMATION_BYPASS_SECRET" || { echo "Missing VERCEL_AUTOMATION_BYPASS_SECRET"; exit 1; }
-          deployment_url=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" | tail -n 1)
+          deployment_url=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" \
+            --env DATABASE_URL="$DEPLOY_DATABASE_URL" \
+            --env MIGRATION_DATABASE_URL="$DEPLOY_DATABASE_URL" | tail -n 1)
           curl --fail --silent --show-error --retry 3 --connect-timeout 10 --max-time 60 \
             --header "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" \
             "$deployment_url/health" > /tmp/backend-health.json
