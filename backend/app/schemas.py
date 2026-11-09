@@ -34,6 +34,7 @@ class ExecutionRead(BaseModel):
     strategy_id: int
     status: str
     result_summary: str | None
+    evaluation_result: dict | None = None
     created_at: datetime
 
 

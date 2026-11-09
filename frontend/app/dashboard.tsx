@@ -20,7 +20,16 @@ const colors = {
   SCHEDULED: "bg-orange-100 text-orange-900",
   SUPERSEDED: "bg-stone-100 text-stone-500",
 };
-const blank = { goal: "", context: "", channel: "instagram" };
+const goalMetrics = [
+  { key: "reach", label: "觸及帳號數" },
+  { key: "registrations", label: "有效報名人數" },
+] as const;
+const blank = {
+  goal: "",
+  context: "",
+  channel: "instagram",
+  kpi: { reach: "", registrations: "" },
+};
 const blankDraft = {
   title: "",
   caption: "",
@@ -266,6 +275,16 @@ export default function Dashboard() {
   async function submit(event) {
     event.preventDefault();
     if (!form.goal.trim()) return setError("請填寫活動目標。");
+    const kpiDefinition: Record<string, number> = {};
+    for (const { key, label } of goalMetrics) {
+      const input = form.kpi[key].trim();
+      if (!input) continue;
+      const value = Number(input);
+      if (!Number.isSafeInteger(value) || value < 0) {
+        return setError(`${label}目標請填寫非負整數。`);
+      }
+      kpiDefinition[key] = value;
+    }
     setError("");
     try {
       const goal = await call("/goals", {
@@ -273,6 +292,7 @@ export default function Dashboard() {
         body: JSON.stringify({
           title: form.goal.trim(),
           description: form.context.trim() || null,
+          kpi_definition: kpiDefinition,
           constraints: { channel: form.channel },
         }),
       });
@@ -733,6 +753,24 @@ export default function Dashboard() {
                     }
                   />
                 </Field>
+                <fieldset className="space-y-3">
+                  <legend>KPI 目標（選填）</legend>
+                  <p className="text-sm">請填寫希望達到的數量，留白的項目不納入評估。</p>
+                  {goalMetrics.map(({ key, label }) => (
+                    <Field key={key} label={label}>
+                      <input
+                        className="input"
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={form.kpi[key]}
+                        onChange={(e) =>
+                          setForm({ ...form, kpi: { ...form.kpi, [key]: e.target.value } })
+                        }
+                      />
+                    </Field>
+                  ))}
+                </fieldset>
                 <Field label="建議渠道">
                   <select
                     className="input"

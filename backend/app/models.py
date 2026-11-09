@@ -56,6 +56,7 @@ class Execution(TenantRow, Base):
     strategy_id: Mapped[int] = mapped_column(BigInteger)
     status: Mapped[str] = mapped_column(String(32), server_default="QUEUED")
     result_summary: Mapped[str | None] = mapped_column(Text)
+    evaluation_result: Mapped[dict | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     __table_args__ = (
         ForeignKeyConstraint(["workspace_id", "strategy_id"], ["strategies.workspace_id", "strategies.id"]),
         UniqueConstraint("workspace_id", "id"),

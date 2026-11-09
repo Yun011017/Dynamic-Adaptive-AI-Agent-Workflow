@@ -1,6 +1,7 @@
 import hmac
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -15,11 +16,13 @@ from .config import settings
 from .content_draft_jobs import queue_content_draft_run
 from .db import engine, get_db
 from .content_drafts import create_content_draft, create_content_draft_version
-from .models import AgentRun, AgentRunCheckpoint, Execution, ExecutionAction, Goal, Strategy, Workspace
+from .evaluation import METRICS, build_evaluation_graph
+from .models import AgentRun, AgentRunCheckpoint, Execution, ExecutionAction, Goal, Observation, Strategy, Workspace
 from .retry import read_with_retry
 from .schemas import AgentRunCreate, AgentRunRead, ContentDraftCreate, ContentDraftGenerateRequest, ContentDraftRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead
 
 app = FastAPI(title="Dynamic Adaptive AI Agent Workflow", version="0.2.0")
+evaluation_graph = build_evaluation_graph()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in settings.frontend_origins.split(",") if origin.strip()],
@@ -153,6 +156,65 @@ def create_execution_record(strategy_id: int, db: DB, tenant: Tenant):
 @app.get("/executions/{execution_id}", response_model=ExecutionRead)
 def get_execution(execution_id: int, db: DB, tenant: Tenant):
     return scoped(db, Execution, execution_id, tenant)
+
+
+@app.get("/executions/{execution_id}/evaluation")
+def get_execution_evaluation(execution_id: int, db: DB, tenant: Tenant):
+    execution = scoped(db, Execution, execution_id, tenant)
+    strategy = scoped(db, Strategy, execution.strategy_id, tenant)
+    goal = scoped(db, Goal, strategy.goal_id, tenant)
+    metric_names = [name for aliases in METRICS.values() for name in aliases]
+    observations = read_with_retry(
+        lambda: db.scalars(
+            select(Observation)
+            .where(
+                Observation.workspace_id == tenant,
+                Observation.execution_id == execution_id,
+                Observation.strategy_id == strategy.id,
+                Observation.metric.in_(metric_names),
+            )
+            .order_by(Observation.observed_at.desc(), Observation.id.desc())
+        ).all(),
+        reset=db.rollback,
+    )
+    result = evaluation_graph.invoke({
+        "targets": goal.kpi_definition,
+        "strategy_context": {
+            "goal": goal.title,
+            "version": strategy.version,
+            "content": strategy.content,
+        },
+        "observations": [{
+            "id": row.id,
+            "metric": row.metric,
+            "value": row.value,
+            "external_event_id": row.external_event_id,
+            "observed_at": row.observed_at.isoformat(),
+            "attribution_status": row.attribution_status,
+        } for row in observations],
+    })
+    return {
+        "goal_id": goal.id,
+        "strategy_id": strategy.id,
+        "execution_id": execution_id,
+        **result["evaluation"],
+    }
+
+
+@app.post("/executions/{execution_id}/evaluation")
+def save_execution_evaluation(execution_id: int, db: DB, tenant: Tenant):
+    execution = db.scalar(
+        select(Execution)
+        .where(Execution.id == execution_id, Execution.workspace_id == tenant)
+        .with_for_update()
+    )
+    if execution is None:
+        raise HTTPException(404, "Resource not found")
+    result = get_execution_evaluation(execution_id, db, tenant)
+    result["evaluated_at"] = datetime.now(timezone.utc).isoformat()
+    execution.evaluation_result = result
+    db.commit()
+    return result
 
 
 @app.post("/strategies/{strategy_id}/content-drafts", response_model=ContentDraftRead, status_code=201)

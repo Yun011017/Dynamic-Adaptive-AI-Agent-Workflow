@@ -149,7 +149,7 @@ class PlatformTests(unittest.TestCase):
     def test_09_repeated_migrate(self):
         command.upgrade(self.config,"head")
         with engine.connect() as c:
-            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0009")
+            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0010")
 
     def test_10_agent_run_is_saved_and_scoped(self):
         goal = self.client.post("/goals", headers=self.headers, json={"title": "Improve workshop registrations"}).json()
