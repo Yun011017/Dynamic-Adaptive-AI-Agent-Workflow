@@ -8,6 +8,7 @@ const labels = {
   COMPLETED: "已完成",
   FAILED: "執行失敗",
   DRAFT: "待編修",
+  PENDING_REVIEW: "待審核",
   SCHEDULED: "已排程",
   SUPERSEDED: "已由新版取代",
 };
@@ -17,6 +18,7 @@ const colors = {
   COMPLETED: "bg-emerald-100 text-emerald-800",
   FAILED: "bg-red-100 text-red-800",
   DRAFT: "bg-stone-100 text-stone-700",
+  PENDING_REVIEW: "bg-amber-100 text-amber-800",
   SCHEDULED: "bg-orange-100 text-orange-900",
   SUPERSEDED: "bg-stone-100 text-stone-500",
 };
@@ -113,8 +115,6 @@ function proposalVersion(draft: ContentDraft) {
 export default function Dashboard() {
 
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
-  const [actionMap, setActionMap] = useState<Record<number, any>>({});
-  const [executingActionId, setExecutingActionId] = useState<number | null>(null);
 
   const fallback =
     process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
@@ -129,7 +129,6 @@ export default function Dashboard() {
   const [draftForm, setDraftForm] = useState(blankDraft);
   const [editingDraft, setEditingDraft] = useState<ContentDraft | null>(null);
   const [draftSaving, setDraftSaving] = useState(false);
-  const [scheduleSaving, setScheduleSaving] = useState<number | null>(null);
   const [draftGenerationRun, setDraftGenerationRun] = useState<string | null>(null);
   const [draftGenerating, setDraftGenerating] = useState(false);
   const [selected, setSelected] = useState(null);
@@ -419,18 +418,18 @@ export default function Dashboard() {
       setError(cause instanceof Error ? cause.message : "無法刪除策略工作紀錄。");
     }
   }
-  async function saveDraft(scheduleRequested = draftForm.scheduleRequested) {
+  async function saveDraft() {
     if (!selectedStrategy) return setError("請先選擇一筆 Strategy。");
     if (!draftForm.title.trim()) return setError("請填寫提案名稱。");
     if (!draftForm.caption.trim()) return setError("請填寫貼文文案。");
     if (uniqueDraftImageUrls.length !== draftImageUrls.length) {
       return setError("圖片網址不可重複，請填寫不同的公開 HTTPS 圖片網址。");
     }
+    if (draftForm.carousel && draftImageRequirements.length < 2) {
+      return setError("輪播貼文至少需要兩項素材需求。");
+    }
     if (draftForm.carousel && draftImageUrls.length > 0 && uniqueDraftImageUrls.length < 2) {
       return setError("輪播貼文有填圖片時，至少需要兩張不同的公開 HTTPS 圖片網址。");
-    }
-    if (scheduleRequested && !draftForm.scheduledAt) {
-      return setError("建立排程前，請先設定預計發布時間。");
     }
     setDraftSaving(true);
     setError("");
@@ -455,7 +454,7 @@ export default function Dashboard() {
           scheduled_at: draftForm.scheduledAt
             ? new Date(draftForm.scheduledAt).toISOString()
             : null,
-          schedule_requested: scheduleRequested,
+          schedule_requested: false,
         }),
       });
       if (editingDraft) {
@@ -466,7 +465,7 @@ export default function Dashboard() {
           ),
         ]);
         setEditingDraft(draft);
-        setDraftForm((form) => ({ ...form, scheduleRequested }));
+        setDraftForm((form) => ({ ...form, scheduleRequested: false }));
       } else {
         setDrafts((all) => [draft, ...all.filter((item) => item.id !== draft.id)]);
         setDraftForm(blankDraft);
@@ -491,7 +490,7 @@ export default function Dashboard() {
           scheduled_at: draftForm.scheduledAt
             ? new Date(draftForm.scheduledAt).toISOString()
             : null,
-          schedule_requested: draftForm.scheduleRequested,
+          schedule_requested: false,
         }),
       });
       setRuns((all) => [run, ...all]);
@@ -527,71 +526,6 @@ export default function Dashboard() {
       carousel: Boolean(draft.payload.carousel),
     });
     document.getElementById("draft-form")?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
-  async function cancelSchedule(draft: ContentDraft) {
-    setScheduleSaving(draft.id);
-    setError("");
-    try {
-      const revised = await call(`/content-drafts/${draft.id}/versions`, {
-        method: "POST",
-        body: JSON.stringify({
-          channel: draft.payload.channel || "instagram",
-          title: draft.payload.title || "未命名內容提案",
-          caption: draft.payload.caption || "未命名內容",
-          hashtags: draft.payload.hashtags || [],
-          image_requirements: draft.payload.image_requirements || [],
-          image_urls: draft.payload.image_urls || [],
-          carousel: Boolean(draft.payload.carousel),
-          scheduled_at: null,
-          schedule_requested: false,
-        }),
-      });
-      setDrafts((all) => [
-        revised,
-        ...all.map((item) =>
-          item.id === draft.id ? { ...item, status: "SUPERSEDED" } : item,
-        ),
-      ]);
-      if (editingDraft?.id === draft.id) setEditingDraft(revised);
-      loadScheduledDrafts().catch(() => setScheduledDrafts([]));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "無法取消排程。");
-    } finally {
-      setScheduleSaving(null);
-    }
-  }
-  async function addToSchedule(draft: ContentDraft) {
-    if (!draft.payload.scheduled_at) return;
-    setScheduleSaving(draft.id);
-    setError("");
-    try {
-      const revised = await call(`/content-drafts/${draft.id}/versions`, {
-        method: "POST",
-        body: JSON.stringify({
-          channel: draft.payload.channel || "instagram",
-          title: draft.payload.title || "未命名內容提案",
-          caption: draft.payload.caption || "未命名內容",
-          hashtags: draft.payload.hashtags || [],
-          image_requirements: draft.payload.image_requirements || [],
-          image_urls: draft.payload.image_urls || [],
-          carousel: Boolean(draft.payload.carousel),
-          scheduled_at: draft.payload.scheduled_at,
-          schedule_requested: true,
-        }),
-      });
-      setDrafts((all) => [
-        revised,
-        ...all.map((item) =>
-          item.id === draft.id ? { ...item, status: "SUPERSEDED" } : item,
-        ),
-      ]);
-      if (editingDraft?.id === draft.id) setEditingDraft(revised);
-      loadScheduledDrafts().catch(() => setScheduledDrafts([]));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "無法加入排程。");
-    } finally {
-      setScheduleSaving(null);
-    }
   }
   function openScheduledDraft(draft: ContentDraft) {
     const strategyId = draft.payload.strategy_id;
@@ -632,17 +566,19 @@ export default function Dashboard() {
     .split("\n")
     .filter((value) => value.trim());
   const uniqueDraftImageUrls = [...new Set(draftImageUrls.map((url) => url.trim()))];
-  const scheduleMissing = [
-    !draftForm.title.trim() && "提案名稱",
-    !draftForm.caption.trim() && "Instagram 文案",
-    !hasFutureScheduleTime && "未來的發布時間",
-    draftForm.carousel && draftImageRequirements.length < 2 && "至少兩項輪播素材需求",
-    draftImageUrls.some((url) => !url.startsWith("https://")) && "有效的公開 HTTPS 圖片網址",
-    uniqueDraftImageUrls.length !== draftImageUrls.length && "圖片網址不可重複",
-    draftForm.carousel && uniqueDraftImageUrls.length < 2 && "至少兩張公開 HTTPS 圖片網址",
-    !draftForm.carousel && uniqueDraftImageUrls.length < 1 && "至少一張公開 HTTPS 圖片網址",
-  ].filter(Boolean) as string[];
-  const canCreateSchedule = scheduleMissing.length === 0;
+  const reviewRequirements = (draft: ContentDraft) => {
+    const scheduledAt = draft.payload.scheduled_at;
+    const validFutureTime = Boolean(scheduledAt)
+      && new Date(scheduledAt as string).getTime() > Date.now();
+    const imageUrls = (draft.payload.image_urls || []).map((url) => url.trim());
+    const uniqueHttpsUrls = [...new Set(imageUrls.filter((url) => url.startsWith("https://")))];
+    const neededImages = draft.payload.carousel ? 2 : 1;
+    return [
+      !validFutureTime && "未來的發布時間",
+      uniqueHttpsUrls.length < neededImages
+        && `至少${neededImages === 2 ? "兩張" : "一張"}公開 HTTPS 圖片網址`,
+    ].filter(Boolean) as string[];
+  };
 
   const loadApprovals = async () => {
     if (!key) return;
@@ -668,6 +604,7 @@ export default function Dashboard() {
     try {
       await call(`/actions/${actionId}/approval-requests`, { method: "POST" });
       await loadApprovals();
+      await loadScheduledDrafts();
       if (selectedStrategy) {
         call(`/strategies/${selectedStrategy}/content-drafts`).then(setDrafts);
       }
@@ -685,6 +622,7 @@ export default function Dashboard() {
         body: JSON.stringify({ decision, reason: decision === "approved" ? "人工確認核可" : "審核未通過" }),
       });
       await loadApprovals();
+      await loadScheduledDrafts();
       if (selectedStrategy) {
         call(`/strategies/${selectedStrategy}/content-drafts`).then(setDrafts);
       }
@@ -693,22 +631,6 @@ export default function Dashboard() {
     }
   };
 
-  // 點擊執行發布 (只有 APPROVED 狀態才會成功)
-  const triggerPublish = async (actionId: number) => {
-    setError("");
-    setExecutingActionId(actionId);
-    try {
-      const res = await call(`/actions/${actionId}/execute`, { method: "POST" });
-      alert(`貼文已成功發布至 Instagram！ID: ${res.external_id}`);
-      if (selectedStrategy) {
-        call(`/strategies/${selectedStrategy}/content-drafts`).then(setDrafts);
-      }
-    } catch (err: any) {
-      setError(err.message || "發布失敗");
-    } finally {
-      setExecutingActionId(null);
-    }
-  };
   return (
     <main className="mx-auto min-h-screen w-[min(1160px,92vw)] py-10 text-maker-ink">
       <header className="mb-8 flex flex-wrap items-center justify-between gap-3">
@@ -1080,7 +1002,7 @@ export default function Dashboard() {
                   onChange={(event) => setDraftForm({ ...draftForm, scheduledAt: event.target.value })}
                 />
                 <small className="mt-1 block text-maker-muted">
-                  可先保存發布規劃；建立排程時必須選擇未來時間。
+                  可先保存發布規劃；送交人工審核時必須選擇未來時間。
                 </small>
                 {draftForm.scheduledAt && !hasFutureScheduleTime && (
                   <small className="mt-1 block font-semibold text-red-700">
@@ -1156,31 +1078,6 @@ export default function Dashboard() {
               >
                 {draftSaving ? "儲存提案中…" : editingDraft ? "建立新版本" : "儲存內容提案"}
               </button>
-              {editingDraft && (
-                <button
-                  type="button"
-                  disabled={draftSaving || !canCreateSchedule}
-                  onClick={() => saveDraft(true)}
-                  className="w-full rounded-xl bg-orange-700 px-4 py-3 font-semibold text-white transition hover:bg-orange-800 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {draftSaving ? "建立排程中…" : "建立排程"}
-                </button>
-              )}
-              {editingDraft && !canCreateSchedule && (
-                <p className="m-0 text-center text-sm text-maker-muted">
-                  建立排程前請完成：{scheduleMissing.join("、")}
-                </p>
-              )}
-              {editingDraft?.status === "SCHEDULED" && (
-                <button
-                  type="button"
-                  disabled={scheduleSaving === editingDraft.id}
-                  onClick={() => cancelSchedule(editingDraft)}
-                  className="w-full rounded-xl border border-maker-line px-4 py-3 font-semibold text-maker-muted transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {scheduleSaving === editingDraft.id ? "取消排程中…" : "取消排程"}
-                </button>
-              )}
             </form>
             <div className="rounded-xl border border-maker-line p-5">
               <h3 className="m-0 text-lg">此 Strategy 的內容提案</h3>
@@ -1202,34 +1099,31 @@ export default function Dashboard() {
                         </span>
                         <span className="mt-2 block text-sm font-semibold text-maker-blue">點擊查看與修改 →</span>
                       </button>
-                      {/* ======= 加入送審與發布控制按鈕 ======= */}
-                      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-maker-line pt-3">
-                        {draft.status === "DRAFT" && (
-                          <button
-                            type="button"
-                            onClick={() => submitForReview(draft.id)}
-                            className="rounded-lg bg-maker-blue px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#244e83]"
-                          >
-                            送交人工審核 →
-                          </button>
-                        )}
-                        {draft.status === "APPROVED" && (
-                          <button
-                            type="button"
-                            disabled={executingActionId === draft.id}
-                            onClick={() => triggerPublish(draft.id)}
-                            className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
-                          >
-                            {executingActionId === draft.id ? "發布中..." : "核准通過：立即發布到 IG"}
-                          </button>
-                        )}
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        {draft.status === "DRAFT" && (() => {
+                          const missing = reviewRequirements(draft);
+                          return <>
+                            <button
+                              type="button"
+                              disabled={missing.length > 0}
+                              onClick={() => submitForReview(draft.id)}
+                              className="rounded-lg bg-maker-blue px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              送交人工審核 →
+                            </button>
+                            {missing.length > 0 && (
+                              <span className="text-xs text-maker-muted">
+                                送交人工審核前需要完成：{missing.join("、")}
+                              </span>
+                            )}
+                          </>;
+                        })()}
                         {draft.status === "SUCCEEDED" && (
                           <span className="font-mono text-xs font-semibold text-emerald-700">
                             ✓ 已成功發布 (ID: {draft.external_id})
                           </span>
                         )}
                       </div>
-                      {/* ==================================== */}
                     </li>
                     
                   ))}
@@ -1248,41 +1142,6 @@ export default function Dashboard() {
         )}
       </section>
       
-      <section className="mt-5 rounded-2xl border border-orange-200 bg-orange-50 p-6 shadow-panel" aria-labelledby="schedule-heading">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="m-0 font-mono text-xs font-semibold tracking-[.12em] text-orange-800">SCHEDULE</p>
-            <h2 id="schedule-heading" className="mt-1 text-xl">已加入排程</h2>
-            <p className="mb-0 text-sm text-maker-muted">所有 Strategy 的已排程內容會集中顯示在這裡。</p>
-          </div>
-          <span className="rounded-full bg-white px-3 py-1 text-sm font-semibold text-orange-800">
-            {scheduledDrafts.length} 則
-          </span>
-        </div>
-        {scheduledDrafts.length ? (
-          <ul className="mt-4 grid list-none gap-3 p-0 md:grid-cols-2">
-            {scheduledDrafts.map((draft) => (
-              <li key={draft.id} className="rounded-xl border border-orange-200 bg-white p-4">
-                <strong className="block">{draft.payload.title || `提案 ${proposalVersion(draft)}`}</strong>
-                <p className="mb-0 mt-2 text-sm text-maker-muted">
-                  預計發布：{draft.payload.scheduled_at ? new Date(draft.payload.scheduled_at).toLocaleString("zh-TW") : "未設定時間"}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => openScheduledDraft(draft)}
-                  className="mt-4 rounded-lg bg-orange-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-orange-800"
-                >
-                  查看提案
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="mb-0 mt-4 rounded-xl border border-dashed border-orange-200 bg-white/70 p-5 text-center text-sm text-maker-muted">
-            尚未有內容加入排程。
-          </p>
-        )}
-      </section>
       {/* ======= 加入審核專區控制台 ======= */}
       <section className="mt-5 rounded-2xl border border-amber-200 bg-amber-50/50 p-6 shadow-panel">
         <div className="flex items-center justify-between">
@@ -1341,6 +1200,41 @@ export default function Dashboard() {
         )}
       </section>
       {/* ================================= */}
+      <section className="mt-5 rounded-2xl border border-orange-200 bg-orange-50 p-6 shadow-panel" aria-labelledby="schedule-heading">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="m-0 font-mono text-xs font-semibold tracking-[.12em] text-orange-800">SCHEDULE</p>
+            <h2 id="schedule-heading" className="mt-1 text-xl">已加入排程</h2>
+            <p className="mb-0 text-sm text-maker-muted">人工審核完成的內容會集中顯示在這裡。</p>
+          </div>
+          <span className="rounded-full bg-white px-3 py-1 text-sm font-semibold text-orange-800">
+            {scheduledDrafts.length} 則
+          </span>
+        </div>
+        {scheduledDrafts.length ? (
+          <ul className="mt-4 grid list-none gap-3 p-0 md:grid-cols-2">
+            {scheduledDrafts.map((draft) => (
+              <li key={draft.id} className="rounded-xl border border-orange-200 bg-white p-4">
+                <strong className="block">{draft.payload.title || `提案 ${proposalVersion(draft)}`}</strong>
+                <p className="mb-0 mt-2 text-sm text-maker-muted">
+                  預計發布：{draft.payload.scheduled_at ? new Date(draft.payload.scheduled_at).toLocaleString("zh-TW") : "未設定時間"}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => openScheduledDraft(draft)}
+                  className="mt-4 rounded-lg bg-orange-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-orange-800"
+                >
+                  查看提案
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mb-0 mt-4 rounded-xl border border-dashed border-orange-200 bg-white/70 p-5 text-center text-sm text-maker-muted">
+            尚未有審核完成的內容加入排程。
+          </p>
+        )}
+      </section>
       {settings && (
         <div className="fixed inset-0 grid place-items-center bg-maker-ink/40 p-4">
           <form

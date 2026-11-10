@@ -509,6 +509,17 @@ def decide_approval_request(approval_id: int, data: ApprovalDecisionRequest, db:
 @app.post("/actions/{action_id}/execute")
 async def execute_action(action_id: int, db: DB, tenant: Tenant):
     action = scoped(db, ExecutionAction, action_id, tenant)
+    if action.status != "SCHEDULED":
+        raise HTTPException(409, "Only approved scheduled content can be published")
+    scheduled_at = action.payload.get("scheduled_at")
+    if not scheduled_at:
+        raise HTTPException(409, "Scheduled content is missing its publish time")
+    try:
+        publish_at = datetime.fromisoformat(str(scheduled_at).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(422, "Scheduled publish time is invalid") from exc
+    if publish_at > datetime.now(timezone.utc):
+        raise HTTPException(409, "This content is not due for publishing yet")
     approval = db.scalar(
         select(ApprovalRequest)
         .where(

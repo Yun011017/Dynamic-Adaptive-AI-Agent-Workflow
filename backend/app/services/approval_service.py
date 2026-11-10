@@ -8,8 +8,20 @@ from app.models import ApprovalRequest, ExecutionAction
 class ApprovalService:
     @staticmethod
     def submit_for_review(db: Session, *, action: ExecutionAction, requested_by: str = "admin") -> ApprovalRequest:
-        if action.status in {"SUPERSEDED", "EXECUTING", "SUCCEEDED"}:
+        if action.status != "DRAFT":
             raise HTTPException(409, f"Action in status {action.status} cannot be submitted for review")
+
+        scheduled_at = action.payload.get("scheduled_at")
+        if not scheduled_at:
+            raise HTTPException(422, "送審前請設定未來的預計發布時間")
+        try:
+            publish_at = datetime.fromisoformat(str(scheduled_at).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(422, "預計發布時間格式不正確") from exc
+        if publish_at <= datetime.now(timezone.utc):
+            raise HTTPException(422, "預計發布時間必須晚於目前時間")
+        if not action.payload.get("meta_adapter_payload"):
+            raise HTTPException(422, "送審前請補齊公開 HTTPS 圖片網址")
         
         # 標記 action 為 PENDING_REVIEW
         action.status = "PENDING_REVIEW"
@@ -48,14 +60,25 @@ class ApprovalService:
 
         if decision == "approved":
             approval.status = "APPROVED"
-            approval.expires_at = now + timedelta(hours=24) # 核准有效期 24 小時
-            action.status = "APPROVED"
+            scheduled_at = datetime.fromisoformat(
+                str(action.payload["scheduled_at"]).replace("Z", "+00:00")
+            )
+            # 核准要覆蓋到發布時間，否則已經審核完成的未來排程會在
+            # worker 執行前失效。
+            approval.expires_at = max(
+                now + timedelta(hours=24),
+                scheduled_at + timedelta(hours=1),
+            )
+            # 排程資料已在送審前確認；核准後才正式進入全站排程佇列。
+            action.status = "SCHEDULED"
         elif decision == "rejected":
             approval.status = "REJECTED"
             action.status = "REJECTED"
         elif decision == "needs_revision":
             approval.status = "REJECTED"
-            action.status = "SUPERSEDED" # 退回修改標記為 SUPERSEDED，由前端或使用者建立新版
+            # 退回修改必須回到同一份 Strategy 的提案清單，讓使用者直接
+            # 修正後重新送審；SUPERSEDED 只保留給真正被新版本取代的草稿。
+            action.status = "DRAFT"
         else:
             raise HTTPException(422, "Invalid decision")
         

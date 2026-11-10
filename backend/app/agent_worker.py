@@ -30,11 +30,11 @@ def process_scheduled_publishing(db: Session) -> str | None:
     """檢查已核准且到達發布時間的 Action，由 worker 執行發布"""
     now = datetime.now(timezone.utc)
     
-    # 取出已核准的 action
+    # 只取出已完成審核、正式進入排程佇列的 action。
     actions = db.scalars(
         select(ExecutionAction)
         .where(
-            ExecutionAction.status == "APPROVED",
+            ExecutionAction.status == "SCHEDULED",
             ExecutionAction.tool == "meta_api",
             ExecutionAction.operation == "instagram_publish"
         )

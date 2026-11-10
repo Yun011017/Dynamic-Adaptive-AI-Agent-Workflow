@@ -48,7 +48,8 @@ class ApprovalAndPublishTests(unittest.TestCase):
             workspace_id=1,
             draft_version=1,
             content_hash="valid_hash",
-            status="PENDING_REVIEW"
+            status="PENDING_REVIEW",
+            payload={"scheduled_at": "2030-01-01T00:00:00+00:00"},
         )
         approval = ApprovalRequest(
             id=1,
@@ -61,7 +62,33 @@ class ApprovalAndPublishTests(unittest.TestCase):
         # 核准
         ApprovalService.process_decision(db, approval=approval, action=action, decision="approved", reason="OK")
         self.assertEqual(approval.status, "APPROVED")
-        self.assertEqual(action.status, "APPROVED")
+        self.assertEqual(action.status, "SCHEDULED")
+
+    def test_revision_request_returns_draft_to_editing(self):
+        db = MagicMock()
+        action = ExecutionAction(
+            id=2,
+            workspace_id=1,
+            draft_version=1,
+            content_hash="valid_hash",
+            status="PENDING_REVIEW",
+            payload={"scheduled_at": "2030-01-01T00:00:00+00:00"},
+        )
+        approval = ApprovalRequest(
+            id=2,
+            workspace_id=1,
+            action_id=2,
+            draft_version=1,
+            content_hash="valid_hash",
+            status="PENDING_REVIEW",
+        )
+
+        ApprovalService.process_decision(
+            db, approval=approval, action=action, decision="needs_revision", reason="補上素材"
+        )
+
+        self.assertEqual(approval.status, "REJECTED")
+        self.assertEqual(action.status, "DRAFT")
 
 
 
