@@ -8,6 +8,7 @@
 
 ## 最新狀態
 
+- [2026-11-11｜內容提案、排程審核與影音素材｜交接文件](2026-11-11-content-proposals-scheduling-review-media.md)：內容提案製作、先排程再送審、影音素材契約與發布 API 接手事項。
 - [2026-11-07｜Agent Strategy 讀取、版本與內容草稿｜交接文件](2026-11-07-agent-strategy-regeneration.md)：完成 Goal 關聯、Strategy v1/v2 重新產生、內容草稿版本關聯與完整驗證。
 - [2026-11-03｜內容草稿與排程｜交接文件](2026-11-03-content-drafts-scheduling.md)：Strategy 到內容草稿、版本與排程的完成範圍；包含給 Strategy 產生者與人工審核／發布負責人的整合契約。
 - [2026-11-01｜表單同步與 Agent 分析｜交接文件](2026-10-31-form-agent-neon.md)：新增學校、系級客群與參加活動名稱，包含 migration、設定與驗證。

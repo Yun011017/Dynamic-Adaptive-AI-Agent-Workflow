@@ -42,11 +42,14 @@ class ContentDraftCreate(BaseModel):
     """Platform-owned content draft. Provider credentials never appear here."""
 
     channel: Literal["instagram"] = "instagram"
+    post_format: Literal["image", "reel", "mixed_carousel"] = "image"
     title: str = Field(default="未命名內容提案", min_length=1, max_length=160)
     caption: str = Field(min_length=1, max_length=2_200)
     hashtags: list[str] = Field(default_factory=list, max_length=30)
     image_requirements: list[str] = Field(default_factory=list, max_length=12)
+    video_requirements: list[str] = Field(default_factory=list, max_length=12)
     image_urls: list[str] = Field(default_factory=list, max_length=10)
+    video_urls: list[str] = Field(default_factory=list, max_length=10)
     carousel: bool = False
     scheduled_at: datetime | None = None
     schedule_requested: bool = False
@@ -71,6 +74,14 @@ class ContentDraftCreate(BaseModel):
             raise ValueError("An image requirement must not exceed 500 characters")
         return cleaned
 
+    @field_validator("video_requirements")
+    @classmethod
+    def clean_video_requirements(cls, values: list[str]) -> list[str]:
+        cleaned = [value.strip() for value in values if value.strip()]
+        if any(len(value) > 500 for value in cleaned):
+            raise ValueError("A video requirement must not exceed 500 characters")
+        return cleaned
+
     @field_validator("image_urls")
     @classmethod
     def validate_image_urls(cls, values: list[str]) -> list[str]:
@@ -79,6 +90,18 @@ class ContentDraftCreate(BaseModel):
             url = value.strip()
             if not url.startswith("https://"):
                 raise ValueError("Image URLs must use public HTTPS")
+            if url not in cleaned:
+                cleaned.append(url)
+        return cleaned
+
+    @field_validator("video_urls")
+    @classmethod
+    def validate_video_urls(cls, values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for value in values:
+            url = value.strip()
+            if not url.startswith("https://"):
+                raise ValueError("Video URLs must use public HTTPS")
             if url not in cleaned:
                 cleaned.append(url)
         return cleaned
@@ -96,15 +119,23 @@ class ContentDraftCreate(BaseModel):
     def validate_carousel_assets(self):
         if self.schedule_requested and self.scheduled_at is None:
             raise ValueError("A scheduled draft needs a scheduled time")
-        if self.carousel and len(self.image_requirements) < 2:
+        if self.post_format == "image" and self.carousel and len(self.image_requirements) < 2:
             raise ValueError("A carousel needs at least two image requirements")
-        if self.carousel and self.image_urls and len(self.image_urls) < 2:
+        if self.post_format == "image" and self.carousel and self.image_urls and len(self.image_urls) < 2:
             raise ValueError("A carousel needs at least two public image URLs when URLs are supplied")
+        if self.post_format == "reel" and self.image_urls:
+            raise ValueError("A Reel cannot include image URLs")
+        if self.post_format == "mixed_carousel" and not self.carousel:
+            raise ValueError("A mixed carousel must set carousel to true")
         if self.schedule_requested:
-            required_images = 2 if self.carousel else 1
-            if len(self.image_urls) < required_images:
+            if self.post_format == "reel" and len(self.video_urls) != 1:
+                raise ValueError("Reel 排程需要一個公開 HTTPS 影片網址")
+            if self.post_format == "mixed_carousel" and (not self.image_urls or not self.video_urls):
+                raise ValueError("圖片＋影片排程需要至少一張公開圖片與一支公開影片")
+            required_images = 2 if self.carousel and self.post_format == "image" else 1
+            if self.post_format == "image" and len(self.image_urls) < required_images:
                 if self.carousel:
-                    raise ValueError("輪播排程需要至少兩張不同的公開 HTTPS 圖片網址")
+                    raise ValueError("多張圖片排程需要至少兩張不同的公開 HTTPS 圖片網址")
                 raise ValueError("排程需要至少一張公開 HTTPS 圖片網址")
         return self
 
@@ -129,7 +160,7 @@ class ContentDraftGenerateRequest(BaseModel):
     """Request a worker-owned draft generation; the HTTP request never invokes a model."""
 
     channel: Literal["instagram"] = "instagram"
-    content_format: Literal["carousel", "single"] = "carousel"
+    content_format: Literal["carousel", "single", "reel", "mixed_carousel"] = "carousel"
     scheduled_at: datetime | None = None
     schedule_requested: bool = False
 
@@ -191,3 +222,4 @@ class ApprovalRequestRead(BaseModel):
     requested_at: datetime
     decided_at: datetime | None
     expires_at: datetime | None
+    action_payload: dict | None = None

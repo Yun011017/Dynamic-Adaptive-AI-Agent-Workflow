@@ -20,11 +20,23 @@ def render_caption(caption: str, hashtags: list[str]) -> str:
 
 
 def meta_adapter_payload(
-    *, caption: str, hashtags: list[str], image_urls: list[str], carousel: bool
+    *, caption: str, hashtags: list[str], image_urls: list[str], carousel: bool,
+    video_urls: list[str] | None = None, post_format: str = "image",
 ) -> dict | None:
     """Build provider-safe input without performing a Meta publish request."""
     rendered_caption = render_caption(caption, hashtags)
-    if carousel and len(image_urls) >= 2:
+    video_urls = video_urls or []
+    if post_format == "reel" and len(video_urls) == 1:
+        return {"media_type": "REELS", "video_url": video_urls[0], "caption": rendered_caption}
+    if post_format == "mixed_carousel" and image_urls and video_urls:
+        return {
+            "media_type": "CAROUSEL", "caption": rendered_caption,
+            "children": [
+                *[{"media_type": "IMAGE", "image_url": url, "is_carousel_item": True} for url in image_urls],
+                *[{"media_type": "VIDEO", "video_url": url, "is_carousel_item": True} for url in video_urls],
+            ],
+        }
+    if post_format == "image" and carousel and len(image_urls) >= 2:
         return {
             "media_type": "CAROUSEL",
             "caption": rendered_caption,
@@ -33,7 +45,7 @@ def meta_adapter_payload(
                 for url in image_urls
             ],
         }
-    if not carousel and len(image_urls) == 1:
+    if post_format == "image" and not carousel and len(image_urls) == 1:
         return {
             "media_type": "IMAGE",
             "image_url": image_urls[0],
@@ -51,11 +63,14 @@ def _payload(
         "strategy_id": strategy.id,
         "strategy_version": strategy.version,
         "channel": data.channel,
+        "post_format": data.post_format,
         "title": data.title.strip(),
         "caption": data.caption.strip(),
         "hashtags": list(data.hashtags),
         "image_requirements": list(data.image_requirements),
+        "video_requirements": list(data.video_requirements),
         "image_urls": image_urls,
+        "video_urls": list(data.video_urls),
         "carousel": data.carousel,
         "scheduled_at": scheduled_at,
         "schedule_requested": data.schedule_requested,
@@ -65,7 +80,9 @@ def _payload(
             caption=data.caption,
             hashtags=list(data.hashtags),
             image_urls=image_urls,
+            video_urls=list(data.video_urls),
             carousel=data.carousel,
+            post_format=data.post_format,
         ),
     }
     if proposal_version is not None:

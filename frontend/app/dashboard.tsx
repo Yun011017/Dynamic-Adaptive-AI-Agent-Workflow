@@ -37,10 +37,12 @@ const blankDraft = {
   caption: "",
   hashtags: "",
   imageRequirement: "",
+  videoRequirement: "",
   imageUrls: "",
+  videoUrls: "",
   scheduledAt: "",
   scheduleRequested: false,
-  carousel: true,
+  postFormat: "image_carousel",
 };
 
 type Strategy = {
@@ -68,7 +70,10 @@ type ContentDraft = {
     caption?: string;
     hashtags?: string[];
     image_requirements?: string[];
+    video_requirements?: string[];
     image_urls?: string[];
+    video_urls?: string[];
+    post_format?: "image" | "reel" | "mixed_carousel";
     carousel?: boolean;
     scheduled_at?: string | null;
     schedule_requested?: boolean;
@@ -84,7 +89,11 @@ type ApprovalItem = {
   content_hash: string;
   status: string;
   requested_at: string;
-  action_payload?: any;
+  action_payload?: {
+    title?: string;
+    scheduled_at?: string | null;
+    video_requirements?: string[];
+  };
 };
 
 
@@ -425,12 +434,6 @@ export default function Dashboard() {
     if (uniqueDraftImageUrls.length !== draftImageUrls.length) {
       return setError("圖片網址不可重複，請填寫不同的公開 HTTPS 圖片網址。");
     }
-    if (draftForm.carousel && draftImageRequirements.length < 2) {
-      return setError("輪播貼文至少需要兩項素材需求。");
-    }
-    if (draftForm.carousel && draftImageUrls.length > 0 && uniqueDraftImageUrls.length < 2) {
-      return setError("輪播貼文有填圖片時，至少需要兩張不同的公開 HTTPS 圖片網址。");
-    }
     setDraftSaving(true);
     setError("");
     try {
@@ -444,13 +447,20 @@ export default function Dashboard() {
           title: draftForm.title.trim(),
           caption: draftForm.caption.trim(),
           hashtags: draftForm.hashtags.split(/[\s,，]+/).filter(Boolean),
+          post_format: draftForm.postFormat === "reel" ? "reel" : draftForm.postFormat === "mixed_carousel" ? "mixed_carousel" : "image",
           image_requirements: draftForm.imageRequirement
+            .split("\n")
+            .filter((value) => value.trim()),
+          video_requirements: draftForm.videoRequirement
             .split("\n")
             .filter((value) => value.trim()),
           image_urls: draftForm.imageUrls
             .split("\n")
             .filter((value) => value.trim()),
-          carousel: draftForm.carousel,
+          video_urls: draftForm.videoUrls
+            .split("\n")
+            .filter((value) => value.trim()),
+          carousel: draftForm.postFormat === "image_carousel" || draftForm.postFormat === "mixed_carousel",
           scheduled_at: draftForm.scheduledAt
             ? new Date(draftForm.scheduledAt).toISOString()
             : null,
@@ -486,7 +496,11 @@ export default function Dashboard() {
         method: "POST",
         body: JSON.stringify({
           channel: "instagram",
-          content_format: draftForm.carousel ? "carousel" : "single",
+          content_format: draftForm.postFormat === "reel"
+            ? "reel"
+            : draftForm.postFormat === "mixed_carousel"
+              ? "mixed_carousel"
+              : draftForm.postFormat === "image_carousel" ? "carousel" : "single",
           scheduled_at: draftForm.scheduledAt
             ? new Date(draftForm.scheduledAt).toISOString()
             : null,
@@ -520,10 +534,16 @@ export default function Dashboard() {
       caption: draft.payload.caption || "",
       hashtags: (draft.payload.hashtags || []).join(", "),
       imageRequirement: (draft.payload.image_requirements || []).join("\n"),
+      videoRequirement: (draft.payload.video_requirements || []).join("\n"),
       imageUrls: (draft.payload.image_urls || []).join("\n"),
+      videoUrls: (draft.payload.video_urls || []).join("\n"),
       scheduledAt,
       scheduleRequested: Boolean(draft.payload.schedule_requested),
-      carousel: Boolean(draft.payload.carousel),
+      postFormat: draft.payload.post_format === "reel"
+        ? "reel"
+        : draft.payload.post_format === "mixed_carousel"
+          ? "mixed_carousel"
+          : draft.payload.carousel ? "image_carousel" : "image",
     });
     document.getElementById("draft-form")?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
@@ -559,9 +579,6 @@ export default function Dashboard() {
     : [];
   const hasFutureScheduleTime = Boolean(draftForm.scheduledAt)
     && new Date(draftForm.scheduledAt).getTime() > Date.now();
-  const draftImageRequirements = draftForm.imageRequirement
-    .split("\n")
-    .filter((value) => value.trim());
   const draftImageUrls = draftForm.imageUrls
     .split("\n")
     .filter((value) => value.trim());
@@ -571,12 +588,24 @@ export default function Dashboard() {
     const validFutureTime = Boolean(scheduledAt)
       && new Date(scheduledAt as string).getTime() > Date.now();
     const imageUrls = (draft.payload.image_urls || []).map((url) => url.trim());
-    const uniqueHttpsUrls = [...new Set(imageUrls.filter((url) => url.startsWith("https://")))];
-    const neededImages = draft.payload.carousel ? 2 : 1;
+    const videoUrls = (draft.payload.video_urls || []).map((url) => url.trim());
+    const uniqueImages = [...new Set(imageUrls.filter((url) => url.startsWith("https://")))];
+    const uniqueVideos = [...new Set(videoUrls.filter((url) => url.startsWith("https://")))];
+    const postFormat = draft.payload.post_format || "image";
+    const imageRequirements = draft.payload.image_requirements || [];
+    const videoRequirements = draft.payload.video_requirements || [];
     return [
       !validFutureTime && "未來的發布時間",
-      uniqueHttpsUrls.length < neededImages
-        && `至少${neededImages === 2 ? "兩張" : "一張"}公開 HTTPS 圖片網址`,
+      postFormat === "image" && imageRequirements.length < 1 && "圖片素材需求",
+      postFormat === "image" && draft.payload.carousel && imageRequirements.length < 2 && "至少兩項圖片素材需求",
+      postFormat === "image" && uniqueImages.length < (draft.payload.carousel ? 2 : 1)
+        && `${draft.payload.carousel ? "至少兩張" : "一張"}公開 HTTPS 圖片網址`,
+      postFormat === "reel" && videoRequirements.length < 1 && "影音素材需求",
+      postFormat === "reel" && uniqueVideos.length !== 1 && "一支公開 HTTPS Reel 影片網址",
+      postFormat === "mixed_carousel" && imageRequirements.length < 1 && "圖片素材需求",
+      postFormat === "mixed_carousel" && videoRequirements.length < 1 && "影音素材需求",
+      postFormat === "mixed_carousel" && uniqueImages.length < 1 && "至少一張公開 HTTPS 圖片網址",
+      postFormat === "mixed_carousel" && uniqueVideos.length < 1 && "至少一支公開 HTTPS 影片網址",
     ].filter(Boolean) as string[];
   };
 
@@ -975,22 +1004,30 @@ export default function Dashboard() {
                   </small>
                 </Field>
               )}
-              <label className="flex items-start gap-3 rounded-xl border border-maker-line p-4 text-sm">
-                <input
-                  type="checkbox"
-                  checked={draftForm.carousel}
-                  onChange={(event) =>
-                    setDraftForm({ ...draftForm, carousel: event.target.checked })
-                  }
-                  className="mt-1 h-4 w-4 accent-[#3265a8]"
-                />
-                <span>
-                  <strong className="block">輪播貼文</strong>
-                  <span className="mt-1 block text-maker-muted">
-                    輪播至少需要兩項素材需求；取消勾選則建立單張貼文草稿。
-                  </span>
-                </span>
-              </label>
+              <Field label="貼文形式">
+                <select
+                  className="input"
+                  value={draftForm.postFormat}
+                  onChange={(event) => setDraftForm({ ...draftForm, postFormat: event.target.value })}
+                >
+                  <option value="image">單張圖片貼文</option>
+                  <option value="image_carousel">多張圖片貼文</option>
+                  <option value="reel">單支影片貼文（Reel）</option>
+                  <option value="mixed_carousel">圖片＋影片貼文</option>
+                </select>
+                <small className="mt-1 block text-maker-muted">
+                  選擇後只需填寫對應素材；只有圖片＋影片需要同時填寫兩種素材。
+                </small>
+                <small className="mt-1 block font-semibold text-maker-blue">
+                  {draftForm.postFormat === "image"
+                    ? "送審需填寫：一項圖片素材需求與一張公開圖片網址。"
+                    : draftForm.postFormat === "image_carousel"
+                      ? "送審需填寫：至少兩項圖片素材需求與兩張公開圖片網址。"
+                      : draftForm.postFormat === "reel"
+                        ? "送審需填寫：一項影音素材需求與一支公開 Reel 影片網址。"
+                        : "送審需填寫：至少一項圖片與影音素材需求，並各提供至少一個公開網址；可加入多張圖片或多支影片。"}
+                </small>
+              </Field>
               <Field label="預計發布時間（選填）">
                 <input
                   type="datetime-local"
@@ -1024,9 +1061,13 @@ export default function Dashboard() {
                   >
                     {draftGenerating
                       ? "Agent 提案產生中…"
-                      : draftForm.carousel
-                        ? "由 Agent 產生輪播提案"
-                        : "由 Agent 產生單張提案"}
+                      : draftForm.postFormat === "reel"
+                        ? "由 Agent 產生 Reel 提案"
+                        : draftForm.postFormat === "image_carousel"
+                          ? "由 Agent 產生多張圖片貼文提案"
+                        : draftForm.postFormat === "mixed_carousel"
+                          ? "由 Agent 產生圖片＋影片貼文提案"
+                          : "由 Agent 產生單張圖片貼文提案"}
                   </button>
                 </div>
               )}
@@ -1037,7 +1078,7 @@ export default function Dashboard() {
                   onChange={(event) =>
                     setDraftForm({ ...draftForm, title: event.target.value })
                   }
-                  placeholder="例如：新手零基礎體驗輪播"
+                  placeholder="例如：新手零基礎體驗提案"
                 />
               </Field>
               <Field label="Instagram 文案 *">
@@ -1056,14 +1097,27 @@ export default function Dashboard() {
                   placeholder="NTUMaker, Arduino, 創客"
                 />
               </Field>
-              <Field label="素材需求（每行一項）">
+              {draftForm.postFormat !== "reel" && (
+              <Field label="圖片素材需求（每行一項）">
                 <textarea
                   className="input min-h-24 resize-y"
                   value={draftForm.imageRequirement}
                   onChange={(event) => setDraftForm({ ...draftForm, imageRequirement: event.target.value })}
-                  placeholder="封面：1080×1080，學生展示實作成品"
+                  placeholder="學生展示實作成品"
                 />
               </Field>
+              )}
+              {draftForm.postFormat !== "image" && (
+              <Field label="影音素材需求（每行一項）">
+                <textarea
+                  className="input min-h-24 resize-y"
+                  value={draftForm.videoRequirement}
+                  onChange={(event) => setDraftForm({ ...draftForm, videoRequirement: event.target.value })}
+                  placeholder="15 秒短影音，拍攝學員完成作品的過程與成果"
+                />
+              </Field>
+              )}
+              {draftForm.postFormat !== "reel" && (
               <Field label="公開圖片網址（每行一個）">
                 <textarea
                   className="input min-h-20 resize-y"
@@ -1072,6 +1126,17 @@ export default function Dashboard() {
                   placeholder="https://example.com/image.jpg"
                 />
               </Field>
+              )}
+              {draftForm.postFormat !== "image" && (
+              <Field label="公開影片網址（每行一個）">
+                <textarea
+                  className="input min-h-20 resize-y"
+                  value={draftForm.videoUrls}
+                  onChange={(event) => setDraftForm({ ...draftForm, videoUrls: event.target.value })}
+                  placeholder="https://example.com/reel.mp4"
+                />
+              </Field>
+              )}
               <button
                 disabled={draftSaving}
                 className="w-full rounded-xl bg-maker-blue px-4 py-3 font-semibold text-white transition hover:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
@@ -1166,6 +1231,26 @@ export default function Dashboard() {
                 <div className="flex items-center justify-between border-b pb-2">
                   <span className="font-mono text-xs font-semibold text-stone-700">Action #{req.action_id} (v{req.draft_version})</span>
                   <span className="font-mono text-[10px] text-stone-400">HASH: {req.content_hash.slice(0, 10)}...</span>
+                </div>
+                <div className="mt-3 text-sm">
+                  <p className="m-0 font-semibold text-maker-ink">
+                    {req.action_payload?.title || "未命名內容提案"}
+                  </p>
+                  <p className="mb-0 mt-2 text-maker-muted">
+                    預計發布：{req.action_payload?.scheduled_at
+                      ? new Date(req.action_payload.scheduled_at).toLocaleString("zh-TW")
+                      : "未設定"}
+                  </p>
+                  <p className="mb-0 mt-2 font-semibold text-maker-ink">影音素材需求</p>
+                  {req.action_payload?.video_requirements?.length ? (
+                    <ul className="mb-0 mt-1 list-disc space-y-1 pl-5 text-maker-muted">
+                      {req.action_payload.video_requirements.map((requirement, index) => (
+                        <li key={`${req.id}-video-${index}`}>{requirement}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mb-0 mt-1 text-maker-muted">未填寫</p>
+                  )}
                 </div>
                 <div className="mt-4 flex gap-2">
                   <button

@@ -475,18 +475,31 @@ def submit_action_for_review(action_id: int, db: DB, tenant: Tenant):
     approval = ApprovalService.submit_for_review(db, action=action)
     db.commit()
     db.refresh(approval)
-    return approval
+    return ApprovalRequestRead.model_validate(approval).model_copy(
+        update={"action_payload": action.payload}
+    )
 
 @app.get("/approval-requests", response_model=list[ApprovalRequestRead])
 def list_approval_requests(db: DB, tenant: Tenant, status: str = "PENDING_REVIEW"):
-    return read_with_retry(
-        lambda: db.scalars(
-            select(ApprovalRequest)
+    rows = read_with_retry(
+        lambda: db.execute(
+            select(ApprovalRequest, ExecutionAction.payload)
+            .join(
+                ExecutionAction,
+                (ExecutionAction.workspace_id == ApprovalRequest.workspace_id)
+                & (ExecutionAction.id == ApprovalRequest.action_id),
+            )
             .where(ApprovalRequest.workspace_id == tenant, ApprovalRequest.status == status)
             .order_by(ApprovalRequest.requested_at.desc())
         ).all(),
         reset=db.rollback,
     )
+    return [
+        ApprovalRequestRead.model_validate(approval).model_copy(
+            update={"action_payload": payload}
+        )
+        for approval, payload in rows
+    ]
 
 @app.post("/approval-requests/{approval_id}/decision", response_model=ApprovalRequestRead)
 def decide_approval_request(approval_id: int, data: ApprovalDecisionRequest, db: DB, tenant: Tenant):
@@ -504,7 +517,9 @@ def decide_approval_request(approval_id: int, data: ApprovalDecisionRequest, db:
     )
     db.commit()
     db.refresh(updated_approval)
-    return updated_approval
+    return ApprovalRequestRead.model_validate(updated_approval).model_copy(
+        update={"action_payload": action.payload}
+    )
 
 @app.post("/actions/{action_id}/execute")
 async def execute_action(action_id: int, db: DB, tenant: Tenant):

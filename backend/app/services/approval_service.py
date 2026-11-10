@@ -22,6 +22,15 @@ class ApprovalService:
             raise HTTPException(422, "預計發布時間必須晚於目前時間")
         if not action.payload.get("meta_adapter_payload"):
             raise HTTPException(422, "送審前請補齊公開 HTTPS 圖片網址")
+        post_format = action.payload.get("post_format", "image")
+        image_requirements = action.payload.get("image_requirements", [])
+        video_requirements = action.payload.get("video_requirements", [])
+        if post_format == "reel" and not video_requirements:
+            raise HTTPException(422, "送審前請填寫影音素材需求")
+        if post_format == "mixed_carousel" and (not image_requirements or not video_requirements):
+            raise HTTPException(422, "送審前請填寫圖片與影音素材需求")
+        if post_format == "image" and not image_requirements:
+            raise HTTPException(422, "送審前請填寫圖片素材需求")
         
         # 標記 action 為 PENDING_REVIEW
         action.status = "PENDING_REVIEW"
