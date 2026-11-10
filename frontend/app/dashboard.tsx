@@ -138,8 +138,16 @@ export default function Dashboard() {
   const [draftForm, setDraftForm] = useState(blankDraft);
   const [editingDraft, setEditingDraft] = useState<ContentDraft | null>(null);
   const [draftSaving, setDraftSaving] = useState(false);
+  const [draftRefreshing, setDraftRefreshing] = useState(false);
+  const [workSubmitting, setWorkSubmitting] = useState(false);
+  const [historyRefreshing, setHistoryRefreshing] = useState(false);
+  const [runOpeningId, setRunOpeningId] = useState<string | null>(null);
+  const [runDeletingId, setRunDeletingId] = useState<string | null>(null);
   const [draftGenerationRun, setDraftGenerationRun] = useState<string | null>(null);
   const [draftGenerating, setDraftGenerating] = useState(false);
+  const [reviewSubmittingId, setReviewSubmittingId] = useState<number | null>(null);
+  const [approvalProcessingId, setApprovalProcessingId] = useState<number | null>(null);
+  const [feedback, setFeedback] = useState("");
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState(blank);
   const [showForm, setShowForm] = useState(true);
@@ -194,6 +202,30 @@ export default function Dashboard() {
     }
     setScheduledDrafts(await call("/content-drafts/scheduled"));
   };
+  const refreshDrafts = async (showFeedback = false) => {
+    if (!selectedStrategy) return;
+    setDraftRefreshing(true);
+    try {
+      const items = await call(`/strategies/${selectedStrategy}/content-drafts`);
+      setDrafts(items);
+      if (showFeedback) setFeedback("內容提案已更新。")
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "無法更新內容提案。");
+    } finally {
+      setDraftRefreshing(false);
+    }
+  };
+  const refreshHistory = async (showFeedback = false) => {
+    setHistoryRefreshing(true);
+    try {
+      await loadHistory();
+      if (showFeedback) setFeedback("策略工作紀錄已更新。")
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "無法更新歷史紀錄。");
+    } finally {
+      setHistoryRefreshing(false);
+    }
+  };
   useEffect(() => {
     const savedBase = sessionStorage.getItem("agentApiBase"),
       savedKey = sessionStorage.getItem("agentApiKey");
@@ -230,13 +262,16 @@ export default function Dashboard() {
       setDrafts([]);
       return;
     }
-    call(`/strategies/${selectedStrategy}/content-drafts`)
-      .then(setDrafts)
-      .catch(() => setDrafts([]));
+    refreshDrafts();
   }, [selectedStrategy, key, base]);
   useEffect(() => {
     loadScheduledDrafts().catch(() => setScheduledDrafts([]));
   }, [key, base]);
+  useEffect(() => {
+    if (!feedback) return;
+    const timer = window.setTimeout(() => setFeedback(""), 5_000);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
   useEffect(() => {
     if (!draftGenerationRun || !selectedStrategy) return;
     const run = runs.find((item) => item.run_id === draftGenerationRun);
@@ -246,6 +281,7 @@ export default function Dashboard() {
         .catch(() => setError("草稿已產生，但無法更新草稿清單。"));
       setDraftGenerating(false);
       setDraftGenerationRun(null);
+      setFeedback("內容提案已由 Agent 產生，可補齊素材後送交人工審核。")
     }
     if (run?.status === "FAILED") {
       setDraftGenerating(false);
@@ -293,6 +329,7 @@ export default function Dashboard() {
       }
       kpiDefinition[key] = value;
     }
+    setWorkSubmitting(true);
     setError("");
     try {
       const goal = await call("/goals", {
@@ -317,22 +354,32 @@ export default function Dashboard() {
       setSelected(run.run_id);
       setForm(blank);
       setShowForm(false);
+      setFeedback("Agent 工作已建立，正在產生 Strategy。")
     } catch (cause) {
       setError(cause.message);
+    } finally {
+      setWorkSubmitting(false);
     }
   }
   async function openRun(run) {
+    setRunOpeningId(run.run_id);
     setSelected(run.run_id);
     resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    const strategyId = await ensureStrategyForRun(run);
-    if (typeof strategyId === "number") {
-      // A newly completed regeneration may not be in the selector's previous
-      // list yet. Refresh before setting its value so the native select can
-      // render Strategy v2 instead of falling back to the first option.
-      const refreshedStrategies = await loadHistory();
-      setSelectedStrategy(latestStrategyId(strategyId, refreshedStrategies));
-      setEditingDraft(null);
-      setDraftForm(blankDraft);
+    try {
+      const strategyId = await ensureStrategyForRun(run);
+      if (typeof strategyId === "number") {
+        // A newly completed regeneration may not be in the selector's previous
+        // list yet. Refresh before setting its value so the native select can
+        // render Strategy v2 instead of falling back to the first option.
+        const refreshedStrategies = await loadHistory();
+        setSelectedStrategy(latestStrategyId(strategyId, refreshedStrategies));
+        setEditingDraft(null);
+        setDraftForm(blankDraft);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "無法開啟策略工作紀錄。");
+    } finally {
+      setRunOpeningId(null);
     }
   }
   function strategyIdForRun(run) {
@@ -418,13 +465,17 @@ export default function Dashboard() {
     if (!window.confirm("確定刪除這筆策略工作紀錄嗎？已保存的 Strategy、內容提案與排程不會受影響。")) {
       return;
     }
+    setRunDeletingId(run.run_id);
     setError("");
     try {
       await call(`/agent/runs/${run.run_id}`, { method: "DELETE" });
       setRuns((all) => all.filter((item) => item.run_id !== run.run_id));
       if (selected === run.run_id) setSelected(null);
+      setFeedback("策略工作紀錄已刪除。")
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "無法刪除策略工作紀錄。");
+    } finally {
+      setRunDeletingId(null);
     }
   }
   async function saveDraft() {
@@ -468,19 +519,17 @@ export default function Dashboard() {
         }),
       });
       if (editingDraft) {
-        setDrafts((all) => [
-          draft,
-          ...all.map((item) =>
-            item.id === editingDraft.id ? { ...item, status: "SUPERSEDED" } : item,
-          ),
-        ]);
         setEditingDraft(draft);
         setDraftForm((form) => ({ ...form, scheduleRequested: false }));
       } else {
         setDrafts((all) => [draft, ...all.filter((item) => item.id !== draft.id)]);
         setDraftForm(blankDraft);
       }
+      // 建立新版本時，後端會將同一提案下所有舊的可操作版本都標為
+      // SUPERSEDED；從歷史版本回復時不可只在前端更新目前那一張卡片。
+      await refreshDrafts();
       loadScheduledDrafts().catch(() => setScheduledDrafts([]));
+      setFeedback(editingDraft ? "已建立新的內容提案版本。" : "內容提案已儲存。")
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "無法建立內容草稿。");
     } finally {
@@ -509,6 +558,7 @@ export default function Dashboard() {
       });
       setRuns((all) => [run, ...all]);
       setDraftGenerationRun(run.run_id);
+      setFeedback("Agent 正在產生內容提案，完成後會自動更新在右側清單。")
     } catch (cause) {
       setDraftGenerating(false);
       setError(cause instanceof Error ? cause.message : "無法建立內容草稿工作。");
@@ -629,6 +679,7 @@ export default function Dashboard() {
 
   // 提交草稿進入審核
   const submitForReview = async (actionId: number) => {
+    setReviewSubmittingId(actionId);
     setError("");
     try {
       await call(`/actions/${actionId}/approval-requests`, { method: "POST" });
@@ -637,13 +688,17 @@ export default function Dashboard() {
       if (selectedStrategy) {
         call(`/strategies/${selectedStrategy}/content-drafts`).then(setDrafts);
       }
+      setFeedback("已送交人工審核，請在待審核貼文佇列處理。")
     } catch (err: any) {
       setError(err.message || "送審失敗");
+    } finally {
+      setReviewSubmittingId(null);
     }
   };
 
   // 處理人工核准 / 退回 / 拒絕
   const handleApprovalDecision = async (approvalId: number, decision: "approved" | "rejected" | "needs_revision") => {
+    setApprovalProcessingId(approvalId);
     setError("");
     try {
       await call(`/approval-requests/${approvalId}/decision`, {
@@ -655,8 +710,17 @@ export default function Dashboard() {
       if (selectedStrategy) {
         call(`/strategies/${selectedStrategy}/content-drafts`).then(setDrafts);
       }
+      setFeedback(
+        decision === "approved"
+          ? "已核准，內容已加入最下方的排程區塊。"
+          : decision === "needs_revision"
+            ? "已退回修改，內容提案已回到原 Strategy 的清單。"
+            : "已拒絕此內容提案。",
+      );
     } catch (err: any) {
       setError(err.message || "審核操作失敗");
+    } finally {
+      setApprovalProcessingId(null);
     }
   };
 
@@ -681,6 +745,11 @@ export default function Dashboard() {
           </button>
         </div>
       </header>
+      {feedback && (
+        <div role="status" aria-live="polite" className="fixed bottom-5 right-5 z-50 max-w-sm rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-900 shadow-lg">
+          {feedback}
+        </div>
+      )}
       <div className="grid gap-5 lg:grid-cols-[.9fr_1.1fr]">
         <section className="rounded-2xl border border-maker-line bg-maker-paper p-6 shadow-panel">
           {showForm ? (
@@ -740,8 +809,11 @@ export default function Dashboard() {
                     {error}
                   </p>
                 )}
-                <button className="w-full rounded-xl bg-maker-blue px-4 py-3 font-semibold text-white">
-                  建立 Agent 工作
+                <button
+                  disabled={workSubmitting}
+                  className="w-full rounded-xl bg-maker-blue px-4 py-3 font-semibold text-white transition hover:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {workSubmitting ? "建立工作中…" : "建立 Agent 工作"}
                 </button>
               </form>
             </>
@@ -775,12 +847,11 @@ export default function Dashboard() {
               </p>
             </div>
             <button
-              onClick={() =>
-                loadHistory().catch(() => setError("無法更新歷史紀錄。"))
-              }
-              className="rounded-lg bg-stone-100 px-3 py-2 text-sm font-semibold text-maker-blue"
+              disabled={historyRefreshing}
+              onClick={() => refreshHistory(true)}
+              className="rounded-lg bg-stone-100 px-3 py-2 text-sm font-semibold text-maker-blue transition hover:bg-stone-200 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              重新整理
+              {historyRefreshing ? "更新中…" : "重新整理"}
             </button>
           </div>
           {strategyRuns.length ? (
@@ -792,14 +863,15 @@ export default function Dashboard() {
                 >
                   <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-start gap-3 p-4">
                     <button
+                      disabled={runOpeningId === run.run_id}
                       onClick={() => openRun(run)}
-                      className="min-w-0 flex-1 text-left hover:opacity-75"
+                      className="min-w-0 flex-1 text-left transition hover:opacity-75 disabled:cursor-wait disabled:opacity-60"
                     >
                       <strong
                         className="block truncate pr-2"
                         title={run.input_payload.goal}
                       >
-                        {run.input_payload.goal}
+                        {runOpeningId === run.run_id ? "開啟策略工作中…" : run.input_payload.goal}
                       </strong>
                       <small className="mt-1 block font-mono text-xs text-maker-muted">
                         {new Date(run.created_at).toLocaleString("zh-TW")}
@@ -809,10 +881,11 @@ export default function Dashboard() {
                     {!['PENDING', 'RUNNING'].includes(run.status) && (
                       <button
                         type="button"
+                        disabled={runDeletingId === run.run_id}
                         onClick={() => deleteStrategyRun(run)}
-                        className="rounded-lg px-3 py-1 text-xs font-semibold text-red-700 transition hover:bg-red-50"
+                        className="rounded-lg px-3 py-1 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        刪除紀錄
+                        {runDeletingId === run.run_id ? "刪除中…" : "刪除紀錄"}
                       </button>
                     )}
                   </div>
@@ -1145,7 +1218,17 @@ export default function Dashboard() {
               </button>
             </form>
             <div className="rounded-xl border border-maker-line p-5">
-              <h3 className="m-0 text-lg">此 Strategy 的內容提案</h3>
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="m-0 text-lg">此 Strategy 的內容提案</h3>
+                <button
+                  type="button"
+                  disabled={draftRefreshing}
+                  onClick={() => refreshDrafts(true)}
+                  className="rounded-lg bg-stone-100 px-3 py-2 text-sm font-semibold text-maker-blue transition hover:bg-stone-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {draftRefreshing ? "更新中…" : "重新整理"}
+                </button>
+              </div>
               {activeDrafts.length ? (
                 <ol className="mt-4 grid max-h-[34rem] list-none gap-3 overflow-y-auto pr-2 p-0">
                   {activeDrafts.map((draft) => (
@@ -1170,11 +1253,11 @@ export default function Dashboard() {
                           return <>
                             <button
                               type="button"
-                              disabled={missing.length > 0}
+                              disabled={missing.length > 0 || reviewSubmittingId === draft.id}
                               onClick={() => submitForReview(draft.id)}
                               className="rounded-lg bg-maker-blue px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                              送交人工審核 →
+                              {reviewSubmittingId === draft.id ? "送審中…" : "送交人工審核"}
                             </button>
                             {missing.length > 0 && (
                               <span className="text-xs text-maker-muted">
@@ -1255,24 +1338,27 @@ export default function Dashboard() {
                 <div className="mt-4 flex gap-2">
                   <button
                     type="button"
+                    disabled={approvalProcessingId === req.id}
                     onClick={() => handleApprovalDecision(req.id, "approved")}
-                    className="flex-1 rounded-lg bg-emerald-700 py-2 text-sm font-semibold text-white hover:bg-emerald-800"
+                    className="flex-1 rounded-lg bg-emerald-700 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    核准 (Approve)
+                    {approvalProcessingId === req.id ? "處理中…" : "核准"}
                   </button>
                   <button
                     type="button"
+                    disabled={approvalProcessingId === req.id}
                     onClick={() => handleApprovalDecision(req.id, "needs_revision")}
-                    className="flex-1 rounded-lg bg-amber-600 py-2 text-sm font-semibold text-white hover:bg-amber-700"
+                    className="flex-1 rounded-lg bg-amber-600 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    退回修改
+                    {approvalProcessingId === req.id ? "處理中…" : "退回修改"}
                   </button>
                   <button
                     type="button"
+                    disabled={approvalProcessingId === req.id}
                     onClick={() => handleApprovalDecision(req.id, "rejected")}
-                    className="flex-1 rounded-lg border border-red-300 py-2 text-sm font-semibold text-red-700 hover:bg-red-50"
+                    className="flex-1 rounded-lg border border-red-300 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    拒絕
+                    {approvalProcessingId === req.id ? "處理中…" : "拒絕"}
                   </button>
                 </div>
               </div>
