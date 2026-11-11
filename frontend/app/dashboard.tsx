@@ -200,7 +200,15 @@ export default function Dashboard() {
       setScheduledDrafts([]);
       return;
     }
-    setScheduledDrafts(await call("/content-drafts/scheduled"));
+    const scheduled = await call("/content-drafts/scheduled") as ContentDraft[];
+    // 排程頁面應以真正的發布先後呈現，而不是草稿建立先後。
+    // 舊資料可能沒有時間，保留在清單最後方便補齊。
+    scheduled.sort((a, b) => {
+      const aTime = a.payload.scheduled_at ? new Date(a.payload.scheduled_at).getTime() : Number.POSITIVE_INFINITY;
+      const bTime = b.payload.scheduled_at ? new Date(b.payload.scheduled_at).getTime() : Number.POSITIVE_INFINITY;
+      return aTime - bTime;
+    });
+    setScheduledDrafts(scheduled);
   };
   const refreshDrafts = async (showFeedback = false) => {
     if (!selectedStrategy) return;
