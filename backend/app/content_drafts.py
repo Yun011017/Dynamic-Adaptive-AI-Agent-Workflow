@@ -9,7 +9,7 @@ from datetime import datetime
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from .models import Execution, ExecutionAction, Strategy
+from .models import Execution, ExecutionAction, Goal, Strategy
 from .schemas import ContentDraftCreate
 
 
@@ -17,6 +17,25 @@ def render_caption(caption: str, hashtags: list[str]) -> str:
     """Return the exact text the Meta adapter will receive; never include secrets."""
     tag_line = " ".join(f"#{tag}" for tag in hashtags)
     return f"{caption.strip()}\n\n{tag_line}".rstrip()
+
+
+def _caption_with_signup_cta(caption: str, signup_url: str | None) -> str:
+    """Keep the registration URL in the actual caption, not as a separate UI field."""
+    clean_caption = caption.strip()
+    if not signup_url or signup_url in clean_caption:
+        return clean_caption
+    return f"{clean_caption}\n\n報名連結：{signup_url}".strip()
+
+
+def _signup_url_for_strategy(db: Session, strategy: Strategy) -> str | None:
+    goal = db.scalar(
+        select(Goal).where(
+            Goal.workspace_id == strategy.workspace_id,
+            Goal.id == strategy.goal_id,
+        )
+    )
+    value = goal.constraints.get("signup_url") if goal and isinstance(goal.constraints, dict) else None
+    return value if isinstance(value, str) and value else None
 
 
 def meta_adapter_payload(
@@ -59,25 +78,27 @@ def _payload(
 ) -> dict:
     scheduled_at = data.scheduled_at.isoformat() if data.scheduled_at else None
     image_urls = list(data.image_urls)
+    caption = _caption_with_signup_cta(data.caption, data.signup_url)
     payload = {
         "strategy_id": strategy.id,
         "strategy_version": strategy.version,
         "channel": data.channel,
         "post_format": data.post_format,
         "title": data.title.strip(),
-        "caption": data.caption.strip(),
+        "caption": caption,
         "hashtags": list(data.hashtags),
         "image_requirements": list(data.image_requirements),
         "video_requirements": list(data.video_requirements),
         "image_urls": image_urls,
         "video_urls": list(data.video_urls),
+        "signup_url": data.signup_url,
         "carousel": data.carousel,
         "scheduled_at": scheduled_at,
         "schedule_requested": data.schedule_requested,
         # This is provider input only; the approval/publishing worker owns the
         # later container creation and publish request.
         "meta_adapter_payload": meta_adapter_payload(
-            caption=data.caption,
+            caption=caption,
             hashtags=list(data.hashtags),
             image_urls=image_urls,
             video_urls=list(data.video_urls),
@@ -102,6 +123,9 @@ def create_content_draft(
     data: ContentDraftCreate,
 ) -> tuple[ExecutionAction, bool]:
     """Create one content action, or return the same action for an identical request."""
+    strategy_signup_url = _signup_url_for_strategy(db, strategy)
+    if strategy_signup_url or not data.signup_url:
+        data = data.model_copy(update={"signup_url": strategy_signup_url})
     identity_payload = _payload(strategy, data)
     idempotency_key = _hash(identity_payload)
     existing = db.scalar(
@@ -166,6 +190,12 @@ def create_content_draft_version(
     data: ContentDraftCreate,
 ) -> ExecutionAction:
     """Keep the previous immutable draft and replace it with the next version."""
+    strategy_signup_url = _signup_url_for_strategy(db, strategy)
+    if strategy_signup_url or not data.signup_url:
+        previous_signup_url = strategy_signup_url or previous.payload.get("signup_url")
+        data = data.model_copy(
+            update={"signup_url": previous_signup_url if isinstance(previous_signup_url, str) else None}
+        )
     proposal_version = previous.payload.get("proposal_version", 1)
     payload = _payload(strategy, data, proposal_version=proposal_version)
     content_hash = _hash(

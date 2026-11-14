@@ -186,6 +186,9 @@ def save_strategy(db: Session, row: AgentRun, recommendation: dict, source_refs:
         key: recommendation.get(key)
         for key in ("target_audience", "content_direction", "channel", "expected_metrics", "reason")
     }
+    signup_url = recommendation.get("constraints", {}).get("signup_url") if isinstance(recommendation.get("constraints"), dict) else None
+    if signup_url:
+        strategy_fields["signup_url"] = signup_url
     strategy_fields["data_source"] = source_refs
     strategy = Strategy(
         workspace_id=row.workspace_id,

@@ -1,9 +1,10 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from pydantic import ValidationError
 
-from app.content_drafts import meta_adapter_payload
+from app.content_drafts import _payload, meta_adapter_payload
 from app.schemas import ContentDraftCreate
 
 
@@ -37,6 +38,18 @@ class MetaAdapterPayloadTests(unittest.TestCase):
         self.assertEqual(payload["media_type"], "IMAGE")
         self.assertEqual(payload["image_url"], "https://images.example.test/cover.jpg")
         self.assertEqual(payload["caption"], "Build with us\n\n#NTUMaker")
+
+    def test_registration_url_is_added_to_caption_and_meta_input(self):
+        payload = _payload(
+            SimpleNamespace(id=12, version=1),
+            ContentDraftCreate(
+                caption="一起來動手做！",
+                signup_url="https://signup.example.test/workshop",
+                image_urls=["https://images.example.test/cover.jpg"],
+            ),
+        )
+        self.assertEqual(payload["caption"], "一起來動手做！\n\n報名連結：https://signup.example.test/workshop")
+        self.assertIn("https://signup.example.test/workshop", payload["meta_adapter_payload"]["caption"])
 
     def test_video_requirements_are_preserved(self):
         draft = ContentDraftCreate(

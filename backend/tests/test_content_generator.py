@@ -6,12 +6,15 @@ from unittest.mock import patch
 from app.content_generator import generate_content_draft
 
 
-def goal():
+def goal(signup_url="https://example.test/register"):
+    constraints = {"channel": "instagram"}
+    if signup_url:
+        constraints["signup_url"] = signup_url
     return SimpleNamespace(
         id=3,
         title="新手創客工作坊",
         description="零基礎學生的實作活動",
-        constraints={"channel": "instagram"},
+        constraints=constraints,
     )
 
 
@@ -33,10 +36,12 @@ class ContentGeneratorTests(unittest.TestCase):
         self.assertGreaterEqual(len(result.image_requirements), 2)
         self.assertEqual(result.image_urls, [])
         self.assertIn("新手創客工作坊", result.caption)
+        self.assertEqual(result.signup_url, "https://example.test/register")
+        self.assertIn("https://example.test/register", result.caption)
 
     def test_local_provider_can_return_a_single_image_draft(self):
         result = generate_content_draft(
-            goal=goal(),
+            goal=goal(signup_url=None),
             strategy=strategy(),
             provider="local",
             model_name="deterministic-langgraph",
@@ -45,6 +50,7 @@ class ContentGeneratorTests(unittest.TestCase):
         self.assertFalse(result.carousel)
         self.assertEqual(len(result.image_requirements), 1)
         self.assertEqual(result.image_urls, [])
+        self.assertNotIn("報名入口", result.caption)
 
     def test_model_output_is_normalized_to_carousel_without_image_urls(self):
         class FakeModel:

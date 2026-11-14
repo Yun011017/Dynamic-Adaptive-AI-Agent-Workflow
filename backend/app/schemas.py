@@ -1,12 +1,34 @@
 from datetime import datetime, timezone
 from typing import Literal
+from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+def _normalize_constraints(value: dict) -> dict:
+    """Keep optional public links safe and consistent across Goal and Agent input."""
+    normalized = dict(value)
+    signup_url = normalized.get("signup_url")
+    if signup_url is None:
+        return normalized
+    if not isinstance(signup_url, str):
+        raise ValueError("報名入口必須是公開 HTTPS 網址")
+    signup_url = signup_url.strip()
+    parsed = urlparse(signup_url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ValueError("報名入口必須是公開 HTTPS 網址")
+    normalized["signup_url"] = signup_url
+    return normalized
 
 class GoalCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     description: str | None = None
     kpi_definition: dict = Field(default_factory=dict)
     constraints: dict = Field(default_factory=dict)
+
+    @field_validator("constraints")
+    @classmethod
+    def normalize_constraints(cls, value: dict) -> dict:
+        return _normalize_constraints(value)
 
 class GoalRead(GoalCreate):
     model_config = ConfigDict(from_attributes=True)
@@ -50,6 +72,7 @@ class ContentDraftCreate(BaseModel):
     video_requirements: list[str] = Field(default_factory=list, max_length=12)
     image_urls: list[str] = Field(default_factory=list, max_length=10)
     video_urls: list[str] = Field(default_factory=list, max_length=10)
+    signup_url: str | None = None
     carousel: bool = False
     scheduled_at: datetime | None = None
     schedule_requested: bool = False
@@ -105,6 +128,13 @@ class ContentDraftCreate(BaseModel):
             if url not in cleaned:
                 cleaned.append(url)
         return cleaned
+
+    @field_validator("signup_url")
+    @classmethod
+    def validate_signup_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalize_constraints({"signup_url": value})["signup_url"]
 
     @field_validator("scheduled_at")
     @classmethod
@@ -186,6 +216,11 @@ class AgentRunCreate(BaseModel):
     context: str = Field(default="", max_length=4_000)
     data_source: Literal["neon_form_summary"] = "neon_form_summary"
     constraints: dict = Field(default_factory=dict)
+
+    @field_validator("constraints")
+    @classmethod
+    def normalize_constraints(cls, value: dict) -> dict:
+        return _normalize_constraints(value)
 
 
 class AgentRunRead(BaseModel):

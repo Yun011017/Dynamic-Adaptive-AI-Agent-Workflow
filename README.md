@@ -7,16 +7,17 @@
 ```text
 frontend/                      Next.js、React、Tailwind 使用者介面
 backend/
-  app/                         FastAPI、ORM、連線、基本 API
+  app/                         FastAPI、資料模型、API 與 worker
   meta_api_test/               Meta OAuth / Instagram API 獨立測試沙盒
   migrations/                  Alembic 版本化 schema
   scripts/manage.py            migration、seed、連線驗證
   tests/                       真實 PostgreSQL 隔離整合測試
   seed.sql                     可重複執行的虛構資料
-  .env.example                 後端設定範本
-  .env                         本機設定，不進 Git
 .github/workflows/backend.yml  CI 與 development 部署
- docs/                         架構、驗收與計畫書
+docs/
+  系統架構規格書.md             系統架構與流程規格
+  資料庫資料字典.md             資料表、欄位與關聯說明
+  handoffs/                    各功能交接文件
 ```
 
 資料庫只使用 Neon PostgreSQL。前端設定放 `frontend/`，後端設定放 `backend/`。

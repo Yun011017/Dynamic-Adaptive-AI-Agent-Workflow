@@ -29,6 +29,7 @@ const goalMetrics = [
 const blank = {
   goal: "",
   context: "",
+  signupUrl: "",
   channel: "instagram",
   kpi: { reach: "", registrations: "" },
 };
@@ -73,6 +74,7 @@ type ContentDraft = {
     video_requirements?: string[];
     image_urls?: string[];
     video_urls?: string[];
+    signup_url?: string | null;
     post_format?: "image" | "reel" | "mixed_carousel";
     carousel?: boolean;
     scheduled_at?: string | null;
@@ -138,6 +140,7 @@ export default function Dashboard() {
   const [draftForm, setDraftForm] = useState(blankDraft);
   const [editingDraft, setEditingDraft] = useState<ContentDraft | null>(null);
   const [draftSaving, setDraftSaving] = useState(false);
+  const [signupUrlError, setSignupUrlError] = useState("");
   const [draftRefreshing, setDraftRefreshing] = useState(false);
   const [workSubmitting, setWorkSubmitting] = useState(false);
   const [historyRefreshing, setHistoryRefreshing] = useState(false);
@@ -327,6 +330,16 @@ export default function Dashboard() {
   async function submit(event) {
     event.preventDefault();
     if (!form.goal.trim()) return setError("請填寫活動目標。");
+    const signupUrl = form.signupUrl.trim();
+    if (signupUrl) {
+      try {
+        const parsed = new URL(signupUrl);
+        if (parsed.protocol !== "https:" || !parsed.hostname) throw new Error();
+      } catch {
+        setSignupUrlError("請填寫可公開開啟的 HTTPS 報名網址。");
+        return;
+      }
+    }
     const kpiDefinition: Record<string, number> = {};
     for (const { key, label } of goalMetrics) {
       const input = form.kpi[key].trim();
@@ -346,7 +359,7 @@ export default function Dashboard() {
           title: form.goal.trim(),
           description: form.context.trim() || null,
           kpi_definition: kpiDefinition,
-          constraints: { channel: form.channel },
+          constraints: { channel: form.channel, ...(signupUrl ? { signup_url: signupUrl } : {}) },
         }),
       });
       const run = await call("/agent/runs", {
@@ -355,7 +368,7 @@ export default function Dashboard() {
           goal_id: goal.id,
           goal: form.goal.trim(),
           context: form.context.trim(),
-          constraints: { channel: form.channel },
+          constraints: { channel: form.channel, ...(signupUrl ? { signup_url: signupUrl } : {}) },
         }),
       });
       setRuns((all) => [run, ...all]);
@@ -780,6 +793,34 @@ export default function Dashboard() {
                       setForm({ ...form, context: e.target.value })
                     }
                   />
+                </Field>
+                <Field label="報名入口（選填）">
+                  <input
+                    className="input"
+                    type="url"
+                    inputMode="url"
+                    value={form.signupUrl}
+                    onChange={(e) => {
+                      setForm({ ...form, signupUrl: e.target.value });
+                      if (signupUrlError) setSignupUrlError("");
+                    }}
+                    onBlur={(e) => {
+                      const value = e.target.value.trim();
+                      if (!value) return setSignupUrlError("");
+                      try {
+                        const parsed = new URL(value);
+                        setSignupUrlError(parsed.protocol === "https:" && parsed.hostname ? "" : "請填寫可公開開啟的 HTTPS 報名網址。");
+                      } catch {
+                        setSignupUrlError("請填寫可公開開啟的 HTTPS 報名網址。");
+                      }
+                    }}
+                    placeholder="https://example.com/register"
+                    aria-describedby="signup-url-help"
+                  />
+                  <small id="signup-url-help" className="mt-1 block text-maker-muted">
+                    會保存並提供 Agent 生成 Strategy 與後續貼文的報名 CTA。
+                  </small>
+                  {signupUrlError && <small role="alert" className="mt-1 block font-semibold text-red-700">{signupUrlError}</small>}
                 </Field>
                 <fieldset className="space-y-3">
                   <legend>KPI 目標（選填）</legend>

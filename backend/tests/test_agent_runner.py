@@ -91,8 +91,23 @@ class AgentRunnerTests(unittest.TestCase):
 
     def test_api_source_is_neon(self):
         self.assertEqual(AgentRunCreate(goal_id=1, goal="test").data_source, "neon_form_summary")
+        self.assertEqual(
+            AgentRunCreate(goal_id=1, goal="test", constraints={"signup_url": "https://example.test/register"}).constraints["signup_url"],
+            "https://example.test/register",
+        )
         with self.assertRaises(ValueError):
             AgentRunCreate(goal_id=1, goal="test", data_source="arbitrary")
+        with self.assertRaises(ValueError):
+            AgentRunCreate(goal_id=1, goal="test", constraints={"signup_url": "http://example.test/register"})
+
+    def test_local_strategy_keeps_signup_url_as_cta(self):
+        with patch("app.agent_runner.get_form_summary", return_value=sample()):
+            result = run_agent(
+                goal="test",
+                context="",
+                constraints={"signup_url": "https://example.test/register"},
+            )
+        self.assertIn("https://example.test/register", result["content_direction"])
 
     def test_audience_data_changes_summary_and_recommendation(self):
         rows = [dict(is_member=True, will_attend=True, school='臺大', department_grade='資工二', activity_name='物聯網'),

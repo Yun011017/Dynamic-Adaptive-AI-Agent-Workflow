@@ -443,6 +443,9 @@ def save_legacy_run_strategy(run_id: str, db: DB, tenant: Tenant):
         key: output.get(key)
         for key in ("target_audience", "content_direction", "channel", "expected_metrics", "reason")
     }
+    signup_url = output.get("constraints", {}).get("signup_url") if isinstance(output.get("constraints"), dict) else None
+    if signup_url:
+        strategy_fields["signup_url"] = signup_url
     strategy_fields["data_source"] = output.get("data_source") or {}
     strategy = Strategy(
         workspace_id=tenant,

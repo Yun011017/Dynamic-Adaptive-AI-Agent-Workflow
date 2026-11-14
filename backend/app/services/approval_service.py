@@ -4,6 +4,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.models import ApprovalRequest, ExecutionAction
+from app.services.media_validation import validate_action_media
 
 class ApprovalService:
     @staticmethod
@@ -31,6 +32,10 @@ class ApprovalService:
             raise HTTPException(422, "送審前請填寫圖片與影音素材需求")
         if post_format == "image" and not image_requirements:
             raise HTTPException(422, "送審前請填寫圖片素材需求")
+
+        # 送審時實際確認 URL 可由公開網路讀取且回傳正確媒體類型。
+        # Meta 的最終可讀性仍由建立 media container 時的回應決定。
+        validate_action_media(action)
         
         # 標記 action 為 PENDING_REVIEW
         action.status = "PENDING_REVIEW"

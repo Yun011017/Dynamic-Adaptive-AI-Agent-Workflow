@@ -16,7 +16,7 @@ CONTENT_SYSTEM_PROMPT = """你是 NTUMaker（臺大自造者社）的資深社�
 
 文案要親民、專業、具體而有溫度：可使用工程開發中的除錯、卡關、零件裝反或非預期狀況作為幽默，但不得空泛裝熟或過度自嘲。優先寫出實體物件、技術名詞、操作動作、觸感或現場畫面，不要用空洞的行銷形容詞。以短句、適當斷行與少量 Emoji 作為視覺引導；排版清楚好讀。
 
-一則貼文只能有一個明確 CTA。不可為了湊文案編造日期、地點、價格、報名連結、成果數字或活動細節；只可使用提供的 Goal 與 Strategy。若資料不足，維持泛用但具體的行動呼籲，不可補造事實。"""
+一則貼文只能有一個明確 CTA。不可為了湊文案編造日期、地點、價格、報名連結、成果數字或活動細節；只可使用提供的 Goal 與 Strategy。只有 Goal constraints 提供 signup_url 時才可使用報名 CTA；沒有時，應依策略改用追蹤、認識社群或查看活動資訊等不假設報名存在的 CTA。若資料不足，維持泛用但具體的行動呼籲，不可補造事實。"""
 
 
 class ContentDraftGenerationError(RuntimeError):
@@ -55,13 +55,15 @@ def _local_draft(
 ) -> ContentDraftCreate:
     direction = strategy.content.strip()
     excerpt = direction[:1_600] if direction else "以活動特色與參與者可獲得的成果為主軸。"
+    signup_url = goal.constraints.get("signup_url") if isinstance(goal.constraints, dict) else None
+    cta = f"報名入口：{signup_url}" if signup_url else "追蹤 NTUMaker，持續關注下一次動手實作。"
     return ContentDraftCreate(
         post_format="reel" if content_format == "reel" else "mixed_carousel" if content_format == "mixed_carousel" else "image",
         title=f"{goal.title}：{('多張圖片' if content_format == 'carousel' else '圖片＋影片' if content_format == 'mixed_carousel' else 'Reel' if content_format == 'reel' else '圖片')}內容提案",
         caption=(
             f"想更了解「{goal.title}」嗎？\n\n"
             f"{excerpt}\n\n"
-            "歡迎查看活動資訊並完成報名。"
+            f"{cta}"
         )[:2_200],
         hashtags=["NTUMaker", "創客"],
         image_requirements=( [] if content_format == "reel" else [
@@ -79,6 +81,7 @@ def _local_draft(
         ),
         image_urls=[],
         video_urls=[],
+        signup_url=signup_url,
         carousel=content_format in {"carousel", "mixed_carousel"},
         scheduled_at=scheduled_at,
         schedule_requested=schedule_requested,
@@ -120,6 +123,7 @@ def generate_content_draft(
             "caption 使用短句、適當斷行與少量 Emoji。開頭應從本次活動的具體物件、技術操作、現場情境或受眾痛點切入；避免『精彩』『豐富』『不容錯過』等空洞形容詞。",
             "每個亮點都需包含具體名詞或動作，例如機具、零件、程式、實作步驟、作品觸感或現場互動；工程幽默必須源自真實的除錯、卡關或物理限制。",
             "只保留一個 CTA，不要同時要求報名、追蹤、私訊、來現場等多個動作。hashtags 建議 3 至 8 個，需與本次活動直接相關且不含 #。",
+            "若 Goal constraints 提供 signup_url，該網址是已提供的報名入口；CTA 應明確引導至它，且不可改寫、縮寫或自行替換網址。若未提供，禁止假設有報名入口，請依策略選擇非報名 CTA。",
             "每一項圖片素材需求都必須標示 5:4 比例（例如 1350×1080），並描述畫面主體、現場細節與該張圖的目的。",
             "影音素材需求需說明畫面內容、建議節奏或鏡頭重點；Reel 優先規劃 9:16 直式畫面。不要假設或輸出實際拍攝檔案網址。",
             "不可輸出 image_urls、token、帳號資訊或發布指令。",
@@ -150,6 +154,9 @@ def generate_content_draft(
         f"{goal.title}：{('多張圖片' if content_format == 'carousel' else '圖片＋影片' if content_format == 'mixed_carousel' else 'Reel' if content_format == 'reel' else '圖片')}內容提案",
     )
     generated["carousel"] = content_format in {"carousel", "mixed_carousel"}
+    generated["signup_url"] = (
+        goal.constraints.get("signup_url") if isinstance(goal.constraints, dict) else None
+    )
     generated["scheduled_at"] = scheduled_at
     generated["schedule_requested"] = schedule_requested
     try:

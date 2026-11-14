@@ -90,6 +90,31 @@ class ApprovalAndPublishTests(unittest.TestCase):
         self.assertEqual(approval.status, "REJECTED")
         self.assertEqual(action.status, "DRAFT")
 
+    @patch("app.services.approval_service.validate_action_media")
+    def test_submit_for_review_checks_public_media_before_queueing(self, check_media):
+        db = MagicMock()
+        action = ExecutionAction(
+            id=3,
+            workspace_id=1,
+            draft_version=1,
+            content_hash="valid_hash",
+            status="DRAFT",
+            payload={
+                "scheduled_at": "2030-01-01T00:00:00+00:00",
+                "post_format": "image",
+                "image_requirements": ["封面圖"],
+                "image_urls": ["https://cdn.example.test/cover.jpg"],
+                "video_urls": [],
+                "meta_adapter_payload": {"media_type": "IMAGE"},
+            },
+        )
+
+        approval = ApprovalService.submit_for_review(db, action=action)
+
+        check_media.assert_called_once_with(action)
+        self.assertEqual(action.status, "PENDING_REVIEW")
+        self.assertEqual(approval.status, "PENDING_REVIEW")
+
 
 
 if __name__ == "__main__":
