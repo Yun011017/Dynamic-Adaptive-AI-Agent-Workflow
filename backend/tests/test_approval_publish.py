@@ -1,10 +1,68 @@
+import asyncio
 import unittest
+from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs
 from unittest.mock import patch, MagicMock
+
+import httpx
 from fastapi import HTTPException
+from pydantic import SecretStr, ValidationError
+
+from app.config import settings
+from app.content_drafts import _payload
+from app.main import execute_action
 from app.models import ExecutionAction, ApprovalRequest
+from app.schemas import ContentDraftCreate, PublishActionRequest
 from app.services.approval_service import ApprovalService
 
 class ApprovalAndPublishTests(unittest.TestCase):
+    async def _exercise_video_publish(self):
+        url = "https://cdn.example.test/reel.mp4"
+        draft = ContentDraftCreate(caption="Watch us build", video_url=url)
+        payload = _payload(MagicMock(id=1, version=1), draft)
+        self.assertEqual(payload["post_format"], "reel")
+        self.assertEqual(payload["video_urls"], [url])
+        payload["scheduled_at"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        action = ExecutionAction(id=1, draft_version=1, status="SCHEDULED", content_hash="hash", payload=payload)
+        approval = ApprovalRequest(status="APPROVED", content_hash="hash")
+        db = MagicMock()
+        db.scalar.side_effect = [action, action, approval]
+        requests = []
+
+        def meta_response(request):
+            requests.append(request)
+            responses = [
+                {"id": "container"},
+                {"status_code": "FINISHED"},
+                {"id": "published-reel"},
+            ]
+            return httpx.Response(200, json=responses[len(requests) - 1])
+
+        meta = httpx.AsyncClient(transport=httpx.MockTransport(meta_response))
+        with (
+            patch.object(settings, "meta_access_token", SecretStr("token")),
+            patch.object(settings, "meta_ig_user_id", "account"),
+            patch("app.services.publisher_service.httpx.AsyncClient", return_value=meta),
+        ):
+            with self.assertRaises(ValidationError):
+                PublishActionRequest(video_url="http://example.test/reel.mp4")
+            with self.assertRaises(HTTPException) as mismatch:
+                await execute_action(1, db, 1, PublishActionRequest(video_url="https://example.test/other.mp4"))
+            self.assertEqual(mismatch.exception.status_code, 409)
+            self.assertEqual(requests, [])
+            response = await execute_action(1, db, 1, PublishActionRequest(video_url=url))
+
+        self.assertEqual(response["external_id"], "published-reel")
+        self.assertEqual(action.status, "SUCCEEDED")
+        self.assertEqual([request.method for request in requests], ["POST", "GET", "POST"])
+        self.assertTrue(requests[0].url.path.endswith("/account/media"))
+        self.assertEqual(parse_qs(requests[0].content.decode())["video_url"], [url])
+        self.assertTrue(requests[1].url.path.endswith("/container"))
+        self.assertTrue(requests[2].url.path.endswith("/account/media_publish"))
+
+    def test_execute_sends_only_the_approved_video_url_to_meta(self):
+        asyncio.run(self._exercise_video_publish())
+
     def test_unapproved_action_blocks_publish(self):
         action = ExecutionAction(
             id=1,

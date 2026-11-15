@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .config import settings
@@ -73,11 +73,16 @@ def workspace(db: DB, credentials: Annotated[HTTPAuthorizationCredentials | None
 Tenant = Annotated[int, Depends(workspace)]
 
 
-def scoped(db, model, object_id, workspace_id):
-    value = read_with_retry(
-        lambda: db.scalar(select(model).where(model.id == object_id, model.workspace_id == workspace_id)),
-        reset=db.rollback,
-    )
+def scoped(db, model, object_id, workspace_id, *, lock=False):
+    query = select(model).where(model.id == object_id, model.workspace_id == workspace_id)
+    if lock:
+        query = query.with_for_update(nowait=True)
+    try:
+        value = read_with_retry(lambda: db.scalar(query), reset=db.rollback)
+    except OperationalError as exc:
+        if lock and getattr(exc.orig, "sqlstate", None) == "55P03":
+            raise HTTPException(409, "Publishing is already in progress") from exc
+        raise
     if value is None:
         raise HTTPException(404, "Resource not found")
     return value
@@ -468,7 +473,7 @@ def save_legacy_run_strategy(run_id: str, db: DB, tenant: Tenant):
     return run
 
 from app.models import ApprovalRequest
-from app.schemas import ApprovalDecisionRequest, ApprovalRequestRead
+from app.schemas import ApprovalDecisionRequest, ApprovalRequestRead, PublishActionRequest
 from app.services.approval_service import ApprovalService
 from app.services.publisher_service import InstagramPublisherService
 
@@ -541,8 +546,9 @@ def decide_approval_request(approval_id: int, data: ApprovalDecisionRequest, db:
     )
 
 @app.post("/actions/{action_id}/execute")
-async def execute_action(action_id: int, db: DB, tenant: Tenant):
-    action = scoped(db, ExecutionAction, action_id, tenant)
+async def execute_action(action_id: int, db: DB, tenant: Tenant, data: PublishActionRequest | None = None):
+    # Serialize manual publishing with the scheduled worker's row lock.
+    action = scoped(db, ExecutionAction, action_id, tenant, lock=True)
     if action.status != "SCHEDULED":
         raise HTTPException(409, "Only approved scheduled content can be published")
     scheduled_at = action.payload.get("scheduled_at")
@@ -554,6 +560,10 @@ async def execute_action(action_id: int, db: DB, tenant: Tenant):
         raise HTTPException(422, "Scheduled publish time is invalid") from exc
     if publish_at > datetime.now(timezone.utc):
         raise HTTPException(409, "This content is not due for publishing yet")
+    if data and data.video_url is not None:
+        media = action.payload.get("meta_adapter_payload") or {}
+        if media.get("media_type") != "REELS" or media.get("video_url") != data.video_url:
+            raise HTTPException(409, "video_url must match the approved Reel")
     approval = db.scalar(
         select(ApprovalRequest)
         .where(

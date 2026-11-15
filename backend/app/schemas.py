@@ -1,7 +1,18 @@
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlparse
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+def _validate_video_url(value: str) -> str:
+    url = value.strip()
+    parsed = urlparse(url)
+    if not url.startswith("https://") or not parsed.hostname or parsed.username is not None:
+        raise ValueError("Video URLs must use public HTTPS without credentials")
+    return url
+
+
+VideoUrl = Annotated[str, AfterValidator(_validate_video_url)]
 
 
 def _normalize_constraints(value: dict) -> dict:
@@ -72,6 +83,7 @@ class ContentDraftCreate(BaseModel):
     video_requirements: list[str] = Field(default_factory=list, max_length=12)
     image_urls: list[str] = Field(default_factory=list, max_length=10)
     video_urls: list[str] = Field(default_factory=list, max_length=10)
+    video_url: VideoUrl | None = None
     signup_url: str | None = None
     carousel: bool = False
     scheduled_at: datetime | None = None
@@ -147,6 +159,14 @@ class ContentDraftCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_carousel_assets(self):
+        if self.video_url is not None:
+            if "post_format" not in self.model_fields_set:
+                self.post_format = "reel"
+            if self.post_format == "image":
+                raise ValueError("video_url requires a Reel or a mixed carousel")
+            if self.video_urls and self.video_urls != [self.video_url]:
+                raise ValueError("video_url and video_urls describe different media")
+            self.video_urls = [self.video_url]
         if self.schedule_requested and self.scheduled_at is None:
             raise ValueError("A scheduled draft needs a scheduled time")
         if self.post_format == "image" and self.carousel and len(self.image_requirements) < 2:
@@ -242,6 +262,10 @@ class ApprovalDecisionRequest(BaseModel):
     decision: Literal["approved", "rejected", "needs_revision"]
     reason: str | None = None
     expected_version: int | None = None
+
+
+class PublishActionRequest(BaseModel):
+    video_url: VideoUrl | None = None
 
 class ApprovalRequestRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
