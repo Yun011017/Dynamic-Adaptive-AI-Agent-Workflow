@@ -486,11 +486,27 @@ def submit_action_for_review(action_id: int, db: DB, tenant: Tenant):
 def list_approval_requests(db: DB, tenant: Tenant, status: str = "PENDING_REVIEW"):
     rows = read_with_retry(
         lambda: db.execute(
-            select(ApprovalRequest, ExecutionAction.payload)
+            select(ApprovalRequest, ExecutionAction.payload, Goal.title)
+            .select_from(ApprovalRequest)
             .join(
                 ExecutionAction,
                 (ExecutionAction.workspace_id == ApprovalRequest.workspace_id)
                 & (ExecutionAction.id == ApprovalRequest.action_id),
+            )
+            .join(
+                Execution,
+                (Execution.id == ExecutionAction.execution_id)
+                & (Execution.workspace_id == ExecutionAction.workspace_id),
+            )
+            .join(
+                Strategy,
+                (Strategy.id == Execution.strategy_id)
+                & (Strategy.workspace_id == Execution.workspace_id),
+            )
+            .join(
+                Goal,
+                (Goal.id == Strategy.goal_id)
+                & (Goal.workspace_id == Strategy.workspace_id),
             )
             .where(ApprovalRequest.workspace_id == tenant, ApprovalRequest.status == status)
             .order_by(ApprovalRequest.requested_at.desc())
@@ -499,9 +515,9 @@ def list_approval_requests(db: DB, tenant: Tenant, status: str = "PENDING_REVIEW
     )
     return [
         ApprovalRequestRead.model_validate(approval).model_copy(
-            update={"action_payload": payload}
+            update={"action_payload": payload, "campaign_name": campaign_name}
         )
-        for approval, payload in rows
+        for approval, payload, campaign_name in rows
     ]
 
 @app.post("/approval-requests/{approval_id}/decision", response_model=ApprovalRequestRead)

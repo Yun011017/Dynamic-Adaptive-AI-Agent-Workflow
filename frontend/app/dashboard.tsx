@@ -91,11 +91,8 @@ type ApprovalItem = {
   content_hash: string;
   status: string;
   requested_at: string;
-  action_payload?: {
-    title?: string;
-    scheduled_at?: string | null;
-    video_requirements?: string[];
-  };
+  campaign_name?: string | null;
+  action_payload?: ContentDraft["payload"] | null;
 };
 
 function Pill({ status }) {
@@ -261,10 +258,70 @@ function InstagramPostPreview({
   );
 }
 
-function proposalVersion(draft: ContentDraft) {
-  const major = draft.payload.proposal_version;
+function proposalVersion(draft: Pick<ContentDraft, "draft_version"> & {
+  payload?: ContentDraft["payload"] | null;
+}) {
+  const major = draft.payload?.proposal_version;
   if (!major) return `舊資料 v${draft.draft_version}`;
   return `v${major}.${draft.draft_version}`;
+}
+
+function ApprovalPostDetails({ request }: { request: ApprovalItem }) {
+  const payload = request.action_payload;
+  const scheduledAt = payload?.scheduled_at;
+  const version = proposalVersion({ draft_version: request.draft_version, payload });
+  const requirements = [
+    { label: "圖片素材需求", items: payload?.image_requirements },
+    { label: "影片素材需求", items: payload?.video_requirements },
+  ];
+
+  return (
+    <details className="group">
+      <summary className="cursor-pointer rounded-md text-sm text-maker-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-maker-blue">
+        <span className="break-words text-base font-semibold">
+          {request.campaign_name || "未命名活動"} · {payload?.title || "未命名貼文"} · {version}
+        </span>
+        <span className="ml-2 text-xs text-maker-muted group-open:hidden">查看詳情</span>
+      </summary>
+      <div className="mt-3 space-y-4 border-t border-stone-200 pt-3 text-sm">
+        <div>
+          <h3 className="m-0 text-sm font-semibold">已排定的發布時間</h3>
+          <p className="mb-0 mt-1 text-maker-muted">
+            {scheduledAt ? (
+              <time dateTime={scheduledAt}>
+                {new Date(scheduledAt).toLocaleString("zh-TW", {
+                  timeZone: "Asia/Taipei",
+                  timeZoneName: "short",
+                })}
+              </time>
+            ) : "未設定"}
+          </p>
+        </div>
+        {requirements.map(({ label, items }) => (
+          <div key={label}>
+            <h3 className="m-0 text-sm font-semibold">{label}</h3>
+            {items?.length ? (
+              <ul className="mb-0 mt-1 list-disc space-y-1 break-words pl-5 text-maker-muted">
+                {items.map((item, index) => <li key={index}>{item}</li>)}
+              </ul>
+            ) : (
+              <p className="mb-0 mt-1 text-maker-muted">未填寫</p>
+            )}
+          </div>
+        ))}
+        <div className="break-words">
+          <h3 className="mb-2 mt-0 text-sm font-semibold">完整文案與素材預覽</h3>
+          <InstagramPostPreview
+            caption={payload?.caption || ""}
+            hashtags={payload?.hashtags || []}
+            imageUrls={payload?.image_urls || []}
+            videoUrls={payload?.video_urls || []}
+            postFormat={payload?.post_format || "image"}
+          />
+        </div>
+      </div>
+    </details>
+  );
 }
 
 export default function Dashboard() {
@@ -1740,49 +1797,13 @@ export default function Dashboard() {
         </div>
 
         {approvals.length ? (
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div className="mt-4 grid items-start gap-4 md:grid-cols-2">
             {approvals.map((req) => (
               <div
                 key={req.id}
                 className="rounded-xl border border-stone-200 bg-white p-5 shadow-sm"
               >
-                <div className="flex items-center justify-between border-b pb-2">
-                  <span className="font-mono text-xs font-semibold text-stone-700">
-                    Action #{req.action_id} (v{req.draft_version})
-                  </span>
-                  <span className="font-mono text-[10px] text-stone-400">
-                    HASH: {req.content_hash.slice(0, 10)}...
-                  </span>
-                </div>
-                <div className="mt-3 text-sm">
-                  <p className="m-0 font-semibold text-maker-ink">
-                    {req.action_payload?.title || "未命名內容提案"}
-                  </p>
-                  <p className="mb-0 mt-2 text-maker-muted">
-                    預計發布：
-                    {req.action_payload?.scheduled_at
-                      ? new Date(
-                          req.action_payload.scheduled_at,
-                        ).toLocaleString("zh-TW")
-                      : "未設定"}
-                  </p>
-                  <p className="mb-0 mt-2 font-semibold text-maker-ink">
-                    影音素材需求
-                  </p>
-                  {req.action_payload?.video_requirements?.length ? (
-                    <ul className="mb-0 mt-1 list-disc space-y-1 pl-5 text-maker-muted">
-                      {req.action_payload.video_requirements.map(
-                        (requirement, index) => (
-                          <li key={`${req.id}-video-${index}`}>
-                            {requirement}
-                          </li>
-                        ),
-                      )}
-                    </ul>
-                  ) : (
-                    <p className="mb-0 mt-1 text-maker-muted">未填寫</p>
-                  )}
-                </div>
+                <ApprovalPostDetails request={req} />
                 <div className="mt-4 flex gap-2">
                   <button
                     type="button"

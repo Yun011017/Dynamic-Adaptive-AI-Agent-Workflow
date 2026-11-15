@@ -257,4 +257,5 @@ class ApprovalRequestRead(BaseModel):
     requested_at: datetime
     decided_at: datetime | None
     expires_at: datetime | None
+    campaign_name: str | None = None
     action_payload: dict | None = None
