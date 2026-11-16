@@ -29,6 +29,12 @@ jobs:
       AGENT_PROVIDER: gemini
       AGENT_MODEL: gemini-3.5-flash-lite
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      # Scheduled publishing runs in this worker, not in the Vercel HTTP
+      # function. Keep Meta credentials in GitHub Secrets and inject them only
+      # for this job.
+      META_IG_USER_ID: ${{ secrets.META_IG_USER_ID }}
+      META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+      GRAPH_API_VERSION: ${{ vars.GRAPH_API_VERSION || 'v21.0' }}
       GOOGLE_FORMS_APPS_SCRIPT_URL: ${{ secrets.GOOGLE_FORMS_APPS_SCRIPT_URL }}
       GOOGLE_FORMS_SOURCE_ID: ${{ vars.GOOGLE_FORMS_SOURCE_ID || 'connection-test' }}
       PLATFORM_WORKSPACE_SLUG: ${{ vars.PLATFORM_WORKSPACE_SLUG || 'development' }}
