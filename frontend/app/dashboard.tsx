@@ -191,7 +191,7 @@ function InstagramPostPreview({
             activeMedia.type === "video" ? (
               <video
                 src={activeMedia.url}
-                className={`${postFormat === "reel" ? "aspect-[9/16]" : "aspect-[5/4]"} w-full bg-black object-contain`}
+                className={`${postFormat === "reel" ? "aspect-[9/16]" : "aspect-[4/5]"} w-full bg-black object-contain`}
                 controls
                 preload="metadata"
                 aria-label="貼文影片預覽"
@@ -201,14 +201,14 @@ function InstagramPostPreview({
               <img
                 src={activeMedia.url}
                 alt="貼文圖片預覽"
-                className="aspect-[5/4] w-full object-cover"
+                className="aspect-[4/5] w-full object-cover"
                 loading="lazy"
                 onError={() => markUnavailable(activeMedia.url)}
               />
             )
           ) : (
             <div
-              className="flex aspect-[5/4] items-center justify-center bg-stone-100 px-6 text-center text-sm text-maker-muted"
+              className="flex aspect-[4/5] items-center justify-center bg-stone-100 px-6 text-center text-sm text-maker-muted"
               role="status"
             >
               {activeMedia
@@ -342,6 +342,10 @@ export default function Dashboard() {
   const [draftSaving, setDraftSaving] = useState(false);
   const [scheduleUpdatingId, setScheduleUpdatingId] = useState<number | null>(null);
   const [mediaUploading, setMediaUploading] = useState<"image" | "video" | null>(null);
+  const [mediaUploadError, setMediaUploadError] = useState<{
+    mediaType: "image" | "video";
+    message: string;
+  } | null>(null);
   const [signupUrlError, setSignupUrlError] = useState("");
   const [draftRefreshing, setDraftRefreshing] = useState(false);
   const [workSubmitting, setWorkSubmitting] = useState(false);
@@ -844,8 +848,12 @@ export default function Dashboard() {
     }
   }
   async function uploadMedia(mediaType: "image" | "video", file: File) {
-    if (!key) return setError("請先設定 Development API key。");
-    if (!file.type) return setError("無法辨識素材格式，請選擇 JPG、PNG、WebP、MP4 或 MOV 檔案。");
+    if (!key) {
+      return setMediaUploadError({ mediaType, message: "請先設定 Development API key。" });
+    }
+    if (!file.type) {
+      return setMediaUploadError({ mediaType, message: "無法辨識素材格式，請選擇 JPG、PNG、WebP、MP4 或 MOV 檔案。" });
+    }
     const normalizedContentType =
       file.type === "image/jpg" || file.type === "image/pjpeg"
         ? "image/jpeg"
@@ -853,6 +861,7 @@ export default function Dashboard() {
           ? "video/mp4"
           : file.type;
     setMediaUploading(mediaType);
+    setMediaUploadError(null);
     setError("");
     try {
       const presignResponse = await fetch(`${normal()}/media/uploads/presign`, {
@@ -916,7 +925,10 @@ export default function Dashboard() {
         setFeedback(`${mediaType === "image" ? "圖片" : "影片"}已上傳至 Cloudflare R2，並加入素材網址。請記得建立新版本保存內容提案。`);
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "素材上傳失敗。");
+      setMediaUploadError({
+        mediaType,
+        message: cause instanceof Error ? cause.message : "素材上傳失敗。",
+      });
     } finally {
       setMediaUploading(null);
     }
@@ -1802,7 +1814,7 @@ export default function Dashboard() {
                       placeholder="https://example.com/image.jpg"
                     />
                     <input
-                      className="mt-2 block w-full text-sm text-maker-muted file:mr-3 file:rounded-lg file:border-0 file:bg-maker-blue file:px-3 file:py-2 file:font-semibold file:text-white hover:file:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
+                      className="mt-2 block w-full cursor-pointer text-sm text-maker-muted file:mr-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-maker-blue file:px-3 file:py-2 file:font-semibold file:text-white hover:file:bg-[#244e83] disabled:cursor-not-allowed disabled:file:cursor-not-allowed disabled:opacity-50"
                       type="file"
                       accept="image/jpeg,image/png,image/webp"
                       disabled={mediaUploading !== null}
@@ -1815,6 +1827,11 @@ export default function Dashboard() {
                     <small className="mt-1 block text-maker-muted">
                       {mediaUploading === "image" ? "圖片上傳至 Cloudflare R2 中…" : "或選擇 JPG、PNG、WebP 圖片上傳；成功後會自動帶入公開網址。"}
                     </small>
+                    {mediaUploadError?.mediaType === "image" && (
+                      <p role="alert" className="mb-0 mt-1 text-sm font-medium text-red-700">
+                        {mediaUploadError.message}
+                      </p>
+                    )}
                   </Field>
                 )}
                 {draftForm.postFormat !== "image" && (
@@ -1831,7 +1848,7 @@ export default function Dashboard() {
                       placeholder="https://example.com/reel.mp4"
                     />
                     <input
-                      className="mt-2 block w-full text-sm text-maker-muted file:mr-3 file:rounded-lg file:border-0 file:bg-maker-blue file:px-3 file:py-2 file:font-semibold file:text-white hover:file:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
+                      className="mt-2 block w-full cursor-pointer text-sm text-maker-muted file:mr-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-maker-blue file:px-3 file:py-2 file:font-semibold file:text-white hover:file:bg-[#244e83] disabled:cursor-not-allowed disabled:file:cursor-not-allowed disabled:opacity-50"
                       type="file"
                       accept="video/mp4,video/quicktime"
                       disabled={mediaUploading !== null}
@@ -1844,6 +1861,11 @@ export default function Dashboard() {
                     <small className="mt-1 block text-maker-muted">
                       {mediaUploading === "video" ? "影片上傳至 Cloudflare R2 中…" : "或選擇 MP4、MOV 影片上傳；成功後會自動帶入公開網址。"}
                     </small>
+                    {mediaUploadError?.mediaType === "video" && (
+                      <p role="alert" className="mb-0 mt-1 text-sm font-medium text-red-700">
+                        {mediaUploadError.message}
+                      </p>
+                    )}
                   </Field>
                 )}
                 {isEditingApprovedSchedule ? (
