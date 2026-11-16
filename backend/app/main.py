@@ -2,9 +2,9 @@ import hmac
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, File, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,7 +19,8 @@ from .content_drafts import create_content_draft, create_content_draft_version
 from .evaluation import METRICS, build_evaluation_graph
 from .models import AgentRun, AgentRunCheckpoint, Execution, ExecutionAction, Goal, Observation, Strategy, Workspace
 from .retry import read_with_retry
-from .schemas import AgentRunCreate, AgentRunRead, ApprovedScheduleUpdate, ContentDraftCreate, ContentDraftGenerateRequest, ContentDraftRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead
+from .schemas import AgentRunCreate, AgentRunRead, ApprovedScheduleUpdate, ContentDraftCreate, ContentDraftGenerateRequest, ContentDraftRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead, MediaUploadPresignRequest, MediaUploadPresignRead, UploadedMediaRead
+from .services.media_storage import cleanup_expired_media_assets, complete_direct_upload, create_direct_upload, upload_media_via_proxy
 
 app = FastAPI(title="Dynamic Adaptive AI Agent Workflow", version="0.2.0")
 evaluation_graph = build_evaluation_graph()
@@ -96,6 +97,40 @@ def health():
     # Health probes are bounded to connect_timeout; callers may retry later.
     probe()
     return {"status": "ok", "database": "connected"}
+
+
+@app.post("/media/uploads/presign", response_model=MediaUploadPresignRead, status_code=201)
+def presign_media_upload(data: MediaUploadPresignRequest, db: DB, tenant: Tenant):
+    """Create a direct browser-to-R2 upload form without proxying media through Vercel."""
+    return create_direct_upload(db=db, workspace_id=tenant, **data.model_dump())
+
+
+@app.post("/media/uploads/{asset_id}/complete", response_model=UploadedMediaRead)
+def complete_media_upload(asset_id: int, db: DB, tenant: Tenant):
+    return complete_direct_upload(db=db, workspace_id=tenant, asset_id=asset_id)
+
+
+@app.post("/media/uploads", response_model=UploadedMediaRead, status_code=201)
+def upload_small_media_fallback(
+    file: Annotated[UploadFile, File(...)],
+    media_type: Literal["image", "video"],
+    tenant: Tenant,
+):
+    return upload_media_via_proxy(file=file, workspace_id=tenant, media_type=media_type)
+
+
+@app.get("/internal/media/cleanup")
+def cleanup_media_uploads(request: Request, db: DB):
+    """Vercel Cron invokes this daily to remove uploads not saved into a proposal."""
+    if not settings.cron_secret:
+        raise HTTPException(503, "Media cleanup is not configured")
+    authorization = request.headers.get("Authorization", "")
+    expected = f"Bearer {settings.cron_secret.get_secret_value()}"
+    if not hmac.compare_digest(authorization, expected):
+        raise HTTPException(401, "Authentication required")
+    deleted = cleanup_expired_media_assets(db=db)
+    db.commit()
+    return {"deleted": deleted}
 
 
 @app.post("/goals", response_model=GoalRead, status_code=201)

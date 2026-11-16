@@ -245,6 +245,27 @@ class ApprovedScheduleUpdate(BaseModel):
         return value
 
 
+class UploadedMediaRead(BaseModel):
+    url: str
+    media_type: Literal["image", "video"]
+    size_bytes: int
+
+
+class MediaUploadPresignRequest(BaseModel):
+    media_type: Literal["image", "video"]
+    filename: str = Field(min_length=1, max_length=255)
+    content_type: str = Field(min_length=1, max_length=128)
+    size_bytes: int = Field(gt=0)
+
+
+class MediaUploadPresignRead(BaseModel):
+    asset_id: int
+    url: str
+    upload_url: str
+    fields: dict[str, str]
+    expires_in_seconds: int
+
+
 class AgentRunCreate(BaseModel):
     goal_id: int = Field(gt=0)
     goal: str = Field(min_length=1, max_length=500)

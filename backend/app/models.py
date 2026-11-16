@@ -123,6 +123,27 @@ class ExecutionAction(TenantRow, Base):
     )
 
 
+class MediaAsset(TenantRow, Base):
+    """R2 uploads tracked until a content proposal references them."""
+
+    __tablename__ = "media_assets"
+    object_key: Mapped[str] = mapped_column(String(512))
+    public_url: Mapped[str] = mapped_column(String(1024))
+    media_type: Mapped[str] = mapped_column(String(16))
+    content_type: Mapped[str] = mapped_column(String(128))
+    size_bytes: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(String(16), server_default="PENDING")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    referenced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "object_key", name="uq_media_assets_object_key"),
+        UniqueConstraint("workspace_id", "public_url", name="uq_media_assets_public_url"),
+        CheckConstraint("media_type IN ('image','video')", name="ck_media_assets_type"),
+        CheckConstraint("status IN ('PENDING','READY','REFERENCED','FAILED','DELETED')", name="ck_media_assets_status"),
+        CheckConstraint("size_bytes > 0", name="ck_media_assets_size"),
+    )
+
+
 class ExternalEvent(TenantRow, Base):
     __tablename__ = "external_events"
     provider: Mapped[str] = mapped_column(String(64))

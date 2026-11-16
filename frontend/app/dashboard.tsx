@@ -341,6 +341,7 @@ export default function Dashboard() {
   const [editingDraft, setEditingDraft] = useState<ContentDraft | null>(null);
   const [draftSaving, setDraftSaving] = useState(false);
   const [scheduleUpdatingId, setScheduleUpdatingId] = useState<number | null>(null);
+  const [mediaUploading, setMediaUploading] = useState<"image" | "video" | null>(null);
   const [signupUrlError, setSignupUrlError] = useState("");
   const [draftRefreshing, setDraftRefreshing] = useState(false);
   const [workSubmitting, setWorkSubmitting] = useState(false);
@@ -842,6 +843,84 @@ export default function Dashboard() {
       setScheduleUpdatingId(null);
     }
   }
+  async function uploadMedia(mediaType: "image" | "video", file: File) {
+    if (!key) return setError("請先設定 Development API key。");
+    if (!file.type) return setError("無法辨識素材格式，請選擇 JPG、PNG、WebP、MP4 或 MOV 檔案。");
+    const normalizedContentType =
+      file.type === "image/jpg" || file.type === "image/pjpeg"
+        ? "image/jpeg"
+        : file.type === "video/x-m4v"
+          ? "video/mp4"
+          : file.type;
+    setMediaUploading(mediaType);
+    setError("");
+    try {
+      const presignResponse = await fetch(`${normal()}/media/uploads/presign`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          media_type: mediaType,
+          filename: file.name,
+          content_type: normalizedContentType,
+          size_bytes: file.size,
+        }),
+      });
+      const presign = await presignResponse.json().catch(() => ({}));
+      if (!presignResponse.ok) throw new Error(presign.detail || presign.error?.message || "無法建立素材上傳連結。");
+      const directData = new FormData();
+      Object.entries(presign.fields || {}).forEach(([name, value]) => directData.append(name, String(value)));
+      directData.append("file", file);
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 45_000);
+      let directSucceeded = false;
+      try {
+        const r2Response = await fetch(presign.upload_url, {
+          method: "POST",
+          body: directData,
+          signal: controller.signal,
+        });
+        directSucceeded = r2Response.ok;
+      } catch {
+        directSucceeded = false;
+      } finally {
+        window.clearTimeout(timeout);
+      }
+      let body: { url?: string; detail?: string; error?: { message?: string } };
+      if (directSucceeded) {
+        const completeResponse = await fetch(`${normal()}/media/uploads/${presign.asset_id}/complete`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}` },
+        });
+        body = await completeResponse.json().catch(() => ({}));
+        if (!completeResponse.ok) throw new Error(body.detail || body.error?.message || "素材驗證失敗。");
+      } else {
+        const fallbackData = new FormData();
+        fallbackData.append("file", file);
+        const fallbackResponse = await fetch(`${normal()}/media/uploads?media_type=${mediaType}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}` },
+          body: fallbackData,
+        });
+        body = await fallbackResponse.json().catch(() => ({}));
+        if (!fallbackResponse.ok) {
+          throw new Error(body.detail || body.error?.message || "素材未能上傳至 R2，請確認網路或 R2 直傳設定後再試。");
+        }
+        setFeedback(`${mediaType === "image" ? "圖片" : "影片"}已透過備援上傳至 Cloudflare R2，並加入素材網址。請記得建立新版本保存內容提案。`);
+      }
+      const field = mediaType === "image" ? "imageUrls" : "videoUrls";
+      setDraftForm((current) => ({
+        ...current,
+        [field]: current[field].trim() ? `${current[field].trim()}\n${body.url}` : body.url,
+      }));
+      if (directSucceeded) {
+        setFeedback(`${mediaType === "image" ? "圖片" : "影片"}已上傳至 Cloudflare R2，並加入素材網址。請記得建立新版本保存內容提案。`);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "素材上傳失敗。");
+    } finally {
+      setMediaUploading(null);
+    }
+  }
   async function generateDraft() {
     if (!selectedStrategy) return setError("請先選擇一筆 Strategy。");
     setDraftGenerating(true);
@@ -925,7 +1004,10 @@ export default function Dashboard() {
   }
   function openScheduledDraft(draft: ContentDraft) {
     const strategyId = draft.payload.strategy_id;
-    if (typeof strategyId === "number") setSelectedStrategy(strategyId);
+    const parsedStrategyId = Number(strategyId);
+    if (Number.isInteger(parsedStrategyId) && parsedStrategyId > 0) {
+      setSelectedStrategy(latestStrategyId(parsedStrategyId));
+    }
     beginRevision(draft);
   }
   const current = runs.find((run) => run.run_id === selected);
@@ -952,7 +1034,34 @@ export default function Dashboard() {
       {} as Record<number, Strategy>,
     ),
   ) as Strategy[];
-  const activeDrafts = drafts.filter(
+  // 已排程的內容仍屬於這一筆 Strategy：右側保留它作為版本與
+  // 排程關聯的入口；最下方的「已加入排程」則是跨 Strategy 的總覽。
+  // 下拉選單會只顯示同一目標的最新 Strategy 版本；排程可能由舊版
+  // 建立，因此以 goal_id 判斷關聯，不能只比對單一 strategy_id。
+  const selectedStrategyRecord = strategies.find(
+    (strategy) => strategy.id === selectedStrategy,
+  );
+  const draftsForSelectedStrategy = [
+    ...drafts,
+    ...scheduledDrafts.filter(
+      (scheduled) => {
+        const scheduledStrategyId = Number(scheduled.payload.strategy_id);
+        const scheduledStrategy = strategies.find(
+          (strategy) => strategy.id === scheduledStrategyId,
+        );
+        const belongsToSelectedGoal = Boolean(
+          selectedStrategyRecord &&
+            scheduledStrategy &&
+            scheduledStrategy.goal_id === selectedStrategyRecord.goal_id,
+        );
+        return (
+          (scheduledStrategyId === selectedStrategy || belongsToSelectedGoal) &&
+          !drafts.some((draft) => draft.id === scheduled.id)
+        );
+      },
+    ),
+  ];
+  const activeDrafts = draftsForSelectedStrategy.filter(
     (draft) => !["SUPERSEDED", "EXECUTING", "SUCCEEDED"].includes(draft.status),
   );
   const revisionHistory = editingDraft
@@ -1692,6 +1801,20 @@ export default function Dashboard() {
                       }
                       placeholder="https://example.com/image.jpg"
                     />
+                    <input
+                      className="mt-2 block w-full text-sm text-maker-muted file:mr-3 file:rounded-lg file:border-0 file:bg-maker-blue file:px-3 file:py-2 file:font-semibold file:text-white hover:file:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      disabled={mediaUploading !== null}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = "";
+                        if (file) uploadMedia("image", file);
+                      }}
+                    />
+                    <small className="mt-1 block text-maker-muted">
+                      {mediaUploading === "image" ? "圖片上傳至 Cloudflare R2 中…" : "或選擇 JPG、PNG、WebP 圖片上傳；成功後會自動帶入公開網址。"}
+                    </small>
                   </Field>
                 )}
                 {draftForm.postFormat !== "image" && (
@@ -1707,6 +1830,20 @@ export default function Dashboard() {
                       }
                       placeholder="https://example.com/reel.mp4"
                     />
+                    <input
+                      className="mt-2 block w-full text-sm text-maker-muted file:mr-3 file:rounded-lg file:border-0 file:bg-maker-blue file:px-3 file:py-2 file:font-semibold file:text-white hover:file:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
+                      type="file"
+                      accept="video/mp4,video/quicktime"
+                      disabled={mediaUploading !== null}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = "";
+                        if (file) uploadMedia("video", file);
+                      }}
+                    />
+                    <small className="mt-1 block text-maker-muted">
+                      {mediaUploading === "video" ? "影片上傳至 Cloudflare R2 中…" : "或選擇 MP4、MOV 影片上傳；成功後會自動帶入公開網址。"}
+                    </small>
                   </Field>
                 )}
                 {isEditingApprovedSchedule ? (

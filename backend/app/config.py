@@ -25,6 +25,21 @@ class Settings(BaseSettings):
     google_api_key: SecretStr | None = None
     openai_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = None
+    # Cloudflare R2 uses its S3-compatible API. Keep credentials server-side;
+    # the browser only ever receives the public URL returned after upload.
+    r2_account_id: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: SecretStr | None = None
+    r2_bucket_name: str = ""
+    r2_public_base_url: str = ""
+    # Direct browser-to-R2 uploads are not constrained by Vercel request bodies.
+    # Keep an application-level cap below the S3 POST 5 GiB object limit.
+    r2_max_upload_bytes: int = Field(default=100 * 1024 * 1024, ge=1, le=5 * 1024 * 1024 * 1024)
+    # A small fallback avoids a browser CORS outage blocking ordinary images.
+    # Larger files must use the direct R2 path and never cross Vercel.
+    r2_proxy_fallback_max_bytes: int = Field(default=4 * 1024 * 1024, ge=1, le=20 * 1024 * 1024)
+    media_upload_ttl_hours: int = Field(default=24, ge=1, le=168)
+    cron_secret: SecretStr | None = None
     google_forms_apps_script_url: str = ""
     google_forms_source_id: str = "connection-test"
     google_forms_member_column: str = "是否是社員"
@@ -49,6 +64,20 @@ class Settings(BaseSettings):
             if value.startswith(prefix):
                 return "postgresql+psycopg://" + value[len(prefix):]
         return value
+
+    @property
+    def r2_enabled(self) -> bool:
+        return bool(
+            self.r2_account_id
+            and self.r2_access_key_id
+            and self.r2_secret_access_key
+            and self.r2_bucket_name
+            and self.r2_public_base_url
+        )
+
+    @property
+    def r2_endpoint_url(self) -> str:
+        return f"https://{self.r2_account_id}.r2.cloudflarestorage.com"
 
 
 settings = Settings()

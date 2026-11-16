@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from .models import Execution, ExecutionAction, Goal, Strategy
 from .schemas import ContentDraftCreate
+from .services.media_storage import mark_media_assets_referenced
 
 
 def render_caption(caption: str, hashtags: list[str]) -> str:
@@ -179,6 +180,11 @@ def create_content_draft(
     )
     db.add(action)
     db.flush()
+    mark_media_assets_referenced(
+        db=db,
+        workspace_id=strategy.workspace_id,
+        urls=[*payload["image_urls"], *payload["video_urls"]],
+    )
     return action, True
 
 
@@ -241,4 +247,9 @@ def create_content_draft_version(
     )
     db.add(action)
     db.flush()
+    mark_media_assets_referenced(
+        db=db,
+        workspace_id=previous.workspace_id,
+        urls=[*payload["image_urls"], *payload["video_urls"]],
+    )
     return action
