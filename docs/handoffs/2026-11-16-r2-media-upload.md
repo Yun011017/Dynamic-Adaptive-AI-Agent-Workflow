@@ -61,3 +61,5 @@ https://media.dynamic-adaptive-ai-agent-workflow.fengyenchen.com
 - 本次不包含 AI 生圖／影片；日後若新增，生成檔也應先上傳 R2，再回填同樣的公開網址流程。
 - 未儲存的暫存素材預設會在 24 小時後由每日清理工作刪除；已保存素材會標記為引用中，不會被清理。
 - 素材由瀏覽器直傳 R2，不會經過 Vercel 函式，因此大檔不受 Vercel HTTP 請求大小限制；實際上限由 `R2_MAX_UPLOAD_BYTES` 控制。
+
+> 提醒（Meta 發文）：`META_ACCESS_TOKEN` 於 11/6 過期。請同步更新 GitHub Actions Secret 與 Vercel 後端的 Token；已失敗的貼文需建立新版本、重新送審與排程。後續建議改採 60 天 Token、於到期前自動刷新，並保存安全的失敗原因供後台顯示。
