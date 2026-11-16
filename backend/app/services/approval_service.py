@@ -8,6 +8,34 @@ from app.services.media_validation import validate_action_media
 
 class ApprovalService:
     @staticmethod
+    def reschedule_approved_action(
+        db: Session,
+        *,
+        action: ExecutionAction,
+        approval: ApprovalRequest,
+        scheduled_at: datetime,
+    ) -> ExecutionAction:
+        """Move an approved post without changing its reviewed content or media."""
+        if action.status != "SCHEDULED" or approval.status != "APPROVED":
+            raise HTTPException(409, "Only an approved scheduled draft can have its time changed")
+        now = datetime.now(timezone.utc)
+        if approval.expires_at and approval.expires_at < now:
+            raise HTTPException(409, "核准已逾期，請修改內容後重新送審")
+
+        # The content hash deliberately excludes scheduled_at. Replacing only this
+        # field therefore preserves exactly the caption and media that were approved.
+        payload = dict(action.payload)
+        payload["scheduled_at"] = scheduled_at.isoformat()
+        payload["schedule_requested"] = True
+        action.payload = payload
+        approval.expires_at = max(
+            now + timedelta(hours=24),
+            scheduled_at + timedelta(hours=1),
+        )
+        db.flush()
+        return action
+
+    @staticmethod
     def submit_for_review(db: Session, *, action: ExecutionAction, requested_by: str = "admin") -> ApprovalRequest:
         if action.status != "DRAFT":
             raise HTTPException(409, f"Action in status {action.status} cannot be submitted for review")

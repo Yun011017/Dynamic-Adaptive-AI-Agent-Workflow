@@ -122,6 +122,53 @@ class ApprovalAndPublishTests(unittest.TestCase):
         self.assertEqual(approval.status, "APPROVED")
         self.assertEqual(action.status, "SCHEDULED")
 
+    def test_approved_draft_can_change_only_its_schedule_without_reapproval(self):
+        db = MagicMock()
+        original_hash = "approved-content-hash"
+        action = ExecutionAction(
+            id=4,
+            workspace_id=1,
+            draft_version=2,
+            content_hash=original_hash,
+            status="SCHEDULED",
+            payload={
+                "caption": "已核准的文案",
+                "image_urls": ["https://cdn.example.test/cover.jpg"],
+                "scheduled_at": "2030-01-01T00:00:00+00:00",
+            },
+        )
+        approval = ApprovalRequest(
+            id=4,
+            workspace_id=1,
+            action_id=4,
+            draft_version=2,
+            content_hash=original_hash,
+            status="APPROVED",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        )
+        new_time = datetime.now(timezone.utc) + timedelta(days=7)
+
+        ApprovalService.reschedule_approved_action(
+            db, action=action, approval=approval, scheduled_at=new_time
+        )
+
+        self.assertEqual(action.status, "SCHEDULED")
+        self.assertEqual(action.content_hash, original_hash)
+        self.assertEqual(action.payload["caption"], "已核准的文案")
+        self.assertEqual(action.payload["scheduled_at"], new_time.isoformat())
+        self.assertTrue(action.payload["schedule_requested"])
+        self.assertGreaterEqual(approval.expires_at, new_time + timedelta(hours=1))
+
+    def test_rescheduling_requires_an_approved_scheduled_draft(self):
+        with self.assertRaises(HTTPException) as error:
+            ApprovalService.reschedule_approved_action(
+                MagicMock(),
+                action=ExecutionAction(status="DRAFT"),
+                approval=ApprovalRequest(status="APPROVED"),
+                scheduled_at=datetime.now(timezone.utc) + timedelta(days=1),
+            )
+        self.assertEqual(error.exception.status_code, 409)
+
     def test_revision_request_returns_draft_to_editing(self):
         db = MagicMock()
         action = ExecutionAction(

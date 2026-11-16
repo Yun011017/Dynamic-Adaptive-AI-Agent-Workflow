@@ -230,6 +230,21 @@ class ContentDraftGenerateRequest(BaseModel):
         return self
 
 
+class ApprovedScheduleUpdate(BaseModel):
+    """Change only the release time of already-approved, unchanged content."""
+
+    scheduled_at: datetime
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def require_future_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("A scheduled time must include a timezone")
+        if value <= datetime.now(timezone.utc):
+            raise ValueError("A scheduled time must be in the future")
+        return value
+
+
 class AgentRunCreate(BaseModel):
     goal_id: int = Field(gt=0)
     goal: str = Field(min_length=1, max_length=500)

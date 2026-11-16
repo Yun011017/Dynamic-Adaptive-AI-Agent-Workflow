@@ -244,7 +244,7 @@ function InstagramPostPreview({
         </div>
         <div className="space-y-2 p-4">
           <p className="m-0 text-sm font-semibold text-maker-ink">NTUMaker</p>
-          <p className="m-0 whitespace-pre-wrap text-sm leading-6 text-maker-ink">
+          <p className="m-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm leading-6 text-maker-ink">
             {caption.trim() || "貼文文案會顯示在這裡。"}
           </p>
           {hashtags.length > 0 && (
@@ -340,6 +340,7 @@ export default function Dashboard() {
   const [draftForm, setDraftForm] = useState(blankDraft);
   const [editingDraft, setEditingDraft] = useState<ContentDraft | null>(null);
   const [draftSaving, setDraftSaving] = useState(false);
+  const [scheduleUpdatingId, setScheduleUpdatingId] = useState<number | null>(null);
   const [signupUrlError, setSignupUrlError] = useState("");
   const [draftRefreshing, setDraftRefreshing] = useState(false);
   const [workSubmitting, setWorkSubmitting] = useState(false);
@@ -814,6 +815,33 @@ export default function Dashboard() {
       setDraftSaving(false);
     }
   }
+  async function updateApprovedSchedule() {
+    if (!editingDraft || editingDraft.status !== "SCHEDULED") return;
+    if (!draftForm.scheduledAt || new Date(draftForm.scheduledAt).getTime() <= Date.now()) {
+      setError("請選擇晚於目前時間的發布時間。");
+      return;
+    }
+    setScheduleUpdatingId(editingDraft.id);
+    setError("");
+    try {
+      const updated = await call(`/content-drafts/${editingDraft.id}/schedule`, {
+        method: "PATCH",
+        body: JSON.stringify({ scheduled_at: new Date(draftForm.scheduledAt).toISOString() }),
+      });
+      setDrafts((all) => all.map((draft) => draft.id === updated.id ? updated : draft));
+      loadScheduledDrafts().catch(() =>
+        setScheduledDrafts((all) =>
+          all.map((draft) => draft.id === updated.id ? updated : draft),
+        ),
+      );
+      beginRevision(updated);
+      setFeedback("已更新發布時間；文案與素材維持原核准版本，無須重新送審。");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "無法更新發布時間。");
+    } finally {
+      setScheduleUpdatingId(null);
+    }
+  }
   async function generateDraft() {
     if (!selectedStrategy) return setError("請先選擇一筆 Strategy。");
     setDraftGenerating(true);
@@ -941,6 +969,7 @@ export default function Dashboard() {
   const draftVideoUrls = draftForm.videoUrls
     .split("\n")
     .filter((value) => value.trim());
+  const isEditingApprovedSchedule = editingDraft?.status === "SCHEDULED";
   const uniqueDraftImageUrls = [
     ...new Set(draftImageUrls.map((url) => url.trim())),
   ];
@@ -1470,6 +1499,14 @@ export default function Dashboard() {
                     </button>
                   )}
                 </div>
+                {isEditingApprovedSchedule && (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-950">
+                    <p className="m-0 font-semibold">此提案已核准並加入排程</p>
+                    <p className="mb-0 mt-1">
+                      只調整發布時間可直接儲存、不必重新送審；若修改文案或素材，請建立新版本後重新送審。
+                    </p>
+                  </div>
+                )}
                 {editingDraft && revisionHistory.length > 1 && (
                   <Field label="版本歷史">
                     <select
@@ -1672,16 +1709,35 @@ export default function Dashboard() {
                     />
                   </Field>
                 )}
-                <button
-                  disabled={draftSaving}
-                  className="w-full rounded-xl bg-maker-blue px-4 py-3 font-semibold text-white transition hover:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {draftSaving
-                    ? "儲存提案中…"
-                    : editingDraft
-                      ? "建立新版本"
-                      : "儲存內容提案"}
-                </button>
+                {isEditingApprovedSchedule ? (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      disabled={scheduleUpdatingId === editingDraft?.id || !hasFutureScheduleTime}
+                      onClick={updateApprovedSchedule}
+                      className="rounded-xl bg-emerald-700 px-4 py-3 font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {scheduleUpdatingId === editingDraft?.id ? "更新發布時間中…" : "只更新發布時間（免重審）"}
+                    </button>
+                    <button
+                      disabled={draftSaving}
+                      className="rounded-xl bg-maker-blue px-4 py-3 font-semibold text-white transition hover:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {draftSaving ? "建立新版本中…" : "修改內容並重新送審"}
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    disabled={draftSaving}
+                    className="w-full rounded-xl bg-maker-blue px-4 py-3 font-semibold text-white transition hover:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {draftSaving
+                      ? "儲存提案中…"
+                      : editingDraft
+                        ? "建立新版本"
+                        : "儲存內容提案"}
+                  </button>
+                )}
                 <InstagramPostPreview
                   caption={draftForm.caption}
                   hashtags={draftForm.hashtags.split(/[\s,，]+/).filter(Boolean)}
@@ -1942,9 +1998,9 @@ export default function Dashboard() {
 
 function Card({ title, value }) {
   return (
-    <article className="rounded-xl border border-maker-line p-4">
+    <article className="min-w-0 rounded-xl border border-maker-line p-4">
       <p className="m-0 font-mono text-xs text-maker-muted">{title}</p>
-      <p className="mb-0 mt-2 whitespace-pre-wrap leading-6">{value || "—"}</p>
+      <p className="mb-0 mt-2 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-6">{value || "—"}</p>
     </article>
   );
 }

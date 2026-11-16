@@ -19,7 +19,7 @@ from .content_drafts import create_content_draft, create_content_draft_version
 from .evaluation import METRICS, build_evaluation_graph
 from .models import AgentRun, AgentRunCheckpoint, Execution, ExecutionAction, Goal, Observation, Strategy, Workspace
 from .retry import read_with_retry
-from .schemas import AgentRunCreate, AgentRunRead, ContentDraftCreate, ContentDraftGenerateRequest, ContentDraftRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead
+from .schemas import AgentRunCreate, AgentRunRead, ApprovedScheduleUpdate, ContentDraftCreate, ContentDraftGenerateRequest, ContentDraftRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead
 
 app = FastAPI(title="Dynamic Adaptive AI Agent Workflow", version="0.2.0")
 evaluation_graph = build_evaluation_graph()
@@ -30,7 +30,7 @@ app.add_middleware(
     # Production origins remain explicitly controlled by FRONTEND_ORIGINS.
     allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
 bearer = HTTPBearer(auto_error=False)
@@ -298,6 +298,34 @@ def revise_draft(action_id: int, data: ContentDraftCreate, db: DB, tenant: Tenan
     execution = scoped(db, Execution, previous.execution_id, tenant)
     strategy = scoped(db, Strategy, execution.strategy_id, tenant)
     row = create_content_draft_version(db, previous=previous, strategy=strategy, data=data)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@app.patch("/content-drafts/{action_id}/schedule", response_model=ContentDraftRead)
+def reschedule_approved_draft(action_id: int, data: ApprovedScheduleUpdate, db: DB, tenant: Tenant):
+    """Change only the scheduled time after approval; content changes need a new review."""
+    action = scoped(db, ExecutionAction, action_id, tenant, lock=True)
+    approval = db.scalar(
+        select(ApprovalRequest)
+        .where(
+            ApprovalRequest.workspace_id == tenant,
+            ApprovalRequest.action_id == action.id,
+            ApprovalRequest.draft_version == action.draft_version,
+            ApprovalRequest.content_hash == action.content_hash,
+            ApprovalRequest.status == "APPROVED",
+        )
+        .order_by(ApprovalRequest.decided_at.desc(), ApprovalRequest.id.desc())
+    )
+    if approval is None:
+        raise HTTPException(409, "此提案沒有可沿用的核准紀錄；請修改後重新送審")
+    row = ApprovalService.reschedule_approved_action(
+        db,
+        action=action,
+        approval=approval,
+        scheduled_at=data.scheduled_at,
+    )
     db.commit()
     db.refresh(row)
     return row
