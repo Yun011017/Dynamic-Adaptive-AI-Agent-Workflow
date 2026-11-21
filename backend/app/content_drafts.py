@@ -20,14 +20,6 @@ def render_caption(caption: str, hashtags: list[str]) -> str:
     return f"{caption.strip()}\n\n{tag_line}".rstrip()
 
 
-def _caption_with_signup_cta(caption: str, signup_url: str | None) -> str:
-    """Keep the registration URL in the actual caption, not as a separate UI field."""
-    clean_caption = caption.strip()
-    if not signup_url or signup_url in clean_caption:
-        return clean_caption
-    return f"{clean_caption}\n\n報名連結：{signup_url}".strip()
-
-
 def _signup_url_for_strategy(db: Session, strategy: Strategy) -> str | None:
     goal = db.scalar(
         select(Goal).where(
@@ -79,7 +71,10 @@ def _payload(
 ) -> dict:
     scheduled_at = data.scheduled_at.isoformat() if data.scheduled_at else None
     image_urls = list(data.image_urls)
-    caption = _caption_with_signup_cta(data.caption, data.signup_url)
+    # Agent-generated drafts include a registration CTA when the Goal provides
+    # one.  After that, the editor owns the caption: never re-add a URL that a
+    # human deliberately removed or replaced.
+    caption = data.caption.strip()
     payload = {
         "strategy_id": strategy.id,
         "strategy_version": strategy.version,

@@ -1144,28 +1144,14 @@ export default function Dashboard() {
       ...new Set(videoUrls.filter((url) => url.startsWith("https://"))),
     ];
     const postFormat = draft.payload.post_format || "image";
-    const imageRequirements = draft.payload.image_requirements || [];
-    const videoRequirements = draft.payload.video_requirements || [];
     return [
       !validFutureTime && "未來的發布時間",
-      postFormat === "image" && imageRequirements.length < 1 && "圖片素材需求",
-      postFormat === "image" &&
-        draft.payload.carousel &&
-        imageRequirements.length < 2 &&
-        "至少兩項圖片素材需求",
       postFormat === "image" &&
         uniqueImages.length < (draft.payload.carousel ? 2 : 1) &&
         `${draft.payload.carousel ? "至少兩張" : "一張"}公開 HTTPS 圖片網址`,
-      postFormat === "reel" && videoRequirements.length < 1 && "影音素材需求",
       postFormat === "reel" &&
         uniqueVideos.length !== 1 &&
         "一支公開 HTTPS Reel 影片網址",
-      postFormat === "mixed_carousel" &&
-        imageRequirements.length < 1 &&
-        "圖片素材需求",
-      postFormat === "mixed_carousel" &&
-        videoRequirements.length < 1 &&
-        "影音素材需求",
       postFormat === "mixed_carousel" &&
         uniqueImages.length < 1 &&
         "至少一張公開 HTTPS 圖片網址",
@@ -1713,12 +1699,12 @@ export default function Dashboard() {
                   </small>
                   <small className="mt-1 block font-semibold text-maker-blue">
                     {draftForm.postFormat === "image"
-                      ? "送審需填寫：一項圖片素材需求與一張公開圖片網址。"
+                      ? "送審需填寫：一張公開 HTTPS 圖片網址。"
                       : draftForm.postFormat === "image_carousel"
-                        ? "送審需填寫：至少兩項圖片素材需求與兩張公開圖片網址。"
+                        ? "送審需填寫：至少兩張公開 HTTPS 圖片網址。"
                         : draftForm.postFormat === "reel"
-                          ? "送審需填寫：一項影音素材需求與一支公開 Reel 影片網址。"
-                          : "送審需填寫：至少一項圖片與影音素材需求，並各提供至少一個公開網址；可加入多張圖片或多支影片。"}
+                          ? "送審需填寫：一支公開 HTTPS Reel 影片網址。"
+                          : "送審需填寫：至少一張公開 HTTPS 圖片網址與一支公開 HTTPS 影片網址；可加入多張圖片或多支影片。"}
                   </small>
                 </Field>
                 <Field label="預計發布時間（選填）">
@@ -1811,7 +1797,7 @@ export default function Dashboard() {
                   />
                 </Field>
                 {draftForm.postFormat !== "reel" && (
-                  <Field label="圖片素材需求（每行一項）">
+                <Field label="圖片素材需求（選填，每行一項）">
                     <textarea
                       className="input min-h-24 resize-y"
                       value={draftForm.imageRequirement}
@@ -1826,7 +1812,7 @@ export default function Dashboard() {
                   </Field>
                 )}
                 {draftForm.postFormat !== "image" && (
-                  <Field label="影音素材需求（每行一項）">
+                  <Field label="影音素材需求（選填，每行一項）">
                     <textarea
                       className="input min-h-24 resize-y"
                       value={draftForm.videoRequirement}
@@ -2020,9 +2006,18 @@ export default function Dashboard() {
                             </span>
                           )}
                           {draft.status === "FAILED" && (
-                            <span className="text-xs font-semibold text-red-700">
-                              發布失敗；可點擊上方卡片，以此版本建立新提案後重新送審。
-                            </span>
+                            <>
+                              <span className="text-xs font-semibold text-red-700">
+                                原因：{draft.payload.publish_result?.message || "此舊紀錄尚未保存失敗原因。"}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => beginRevision(draft)}
+                                className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50"
+                              >
+                                以此失敗版本建立新版本
+                              </button>
+                            </>
                           )}
                         </div>
                       </li>
@@ -2184,33 +2179,38 @@ export default function Dashboard() {
           </span>
         </div>
         {publicationHistory.length ? (
-          <ul className="mt-4 grid list-none gap-3 p-0 md:grid-cols-2">
+          <ul
+            className="mt-4 grid h-[30rem] grid-auto-rows-[9.5rem] list-none gap-3 overflow-y-auto pr-2 [scrollbar-gutter:stable] md:grid-cols-2"
+            aria-label="所有發布紀錄"
+          >
             {publicationHistory.map((draft) => {
               const result = draft.payload.publish_result;
               const publishedAt = result?.published_at || null;
               const failedAt = result?.failed_at || null;
               return (
-                <li key={draft.id} className="rounded-xl border border-maker-line p-4">
+                <li key={draft.id} className="flex h-full flex-col rounded-xl border border-maker-line p-3">
                   <button
                     type="button"
                     onClick={() => beginRevision(draft)}
                     className="w-full text-left"
                   >
-                    <span className="flex flex-wrap items-center justify-between gap-2">
-                      <strong>{draft.payload.title || `提案 ${proposalVersion(draft)}`}</strong>
+                    <span className="flex min-w-0 items-center justify-between gap-2">
+                      <strong className="truncate">
+                        {draft.payload.title || `提案 ${proposalVersion(draft)}`}
+                      </strong>
                       <Pill status={draft.status} />
                     </span>
-                    <p className="mb-0 mt-2 line-clamp-2 text-sm text-maker-muted">
+                    <p className="mb-0 mt-1 line-clamp-2 text-xs text-maker-muted">
                       {draft.payload.caption || "尚無貼文內容"}
                     </p>
                   </button>
-                  <div className="mt-3 border-t border-stone-200 pt-3 text-sm">
+                  <div className="mt-auto border-t border-stone-200 pt-2 text-xs">
                     {draft.status === "SUCCEEDED" && (
                       <>
                         <p className="m-0 text-maker-muted">
                           發布時間：{formatTaipeiTime(publishedAt)}
                         </p>
-                        <p className="mb-0 mt-1 break-all font-mono text-xs text-emerald-700">
+                        <p className="mb-0 mt-1 truncate font-mono text-xs text-emerald-700">
                           Meta 貼文 ID：{draft.external_id || result?.external_id || "尚未回傳"}
                         </p>
                       </>
@@ -2223,7 +2223,7 @@ export default function Dashboard() {
                         <p className="m-0 text-maker-muted">
                           失敗時間：{formatTaipeiTime(failedAt)}
                         </p>
-                        <p className="mb-0 mt-1 text-red-700">
+                        <p className="mb-0 mt-1 line-clamp-1 text-red-700">
                           原因：{result?.message || "此舊紀錄尚未保存失敗原因；可建立新版本後重新送審。"}
                         </p>
                       </>

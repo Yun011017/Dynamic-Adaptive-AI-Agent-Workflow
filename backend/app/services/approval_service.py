@@ -51,17 +51,9 @@ class ApprovalService:
             raise HTTPException(422, "預計發布時間必須晚於目前時間")
         if not action.payload.get("meta_adapter_payload"):
             raise HTTPException(422, "送審前請補齊公開 HTTPS 圖片網址")
-        post_format = action.payload.get("post_format", "image")
-        image_requirements = action.payload.get("image_requirements", [])
-        video_requirements = action.payload.get("video_requirements", [])
-        if post_format == "reel" and not video_requirements:
-            raise HTTPException(422, "送審前請填寫影音素材需求")
-        if post_format == "mixed_carousel" and (not image_requirements or not video_requirements):
-            raise HTTPException(422, "送審前請填寫圖片與影音素材需求")
-        if post_format == "image" and not image_requirements:
-            raise HTTPException(422, "送審前請填寫圖片素材需求")
-
         # 送審時實際確認 URL 可由公開網路讀取且回傳正確媒體類型。
+        # 素材需求是給創作與交接使用的選填說明；手動貼上的公開網址與
+        # R2 上傳後得到的網址，都同樣能作為送審素材。
         # Meta 的最終可讀性仍由建立 media container 時的回應決定。
         validate_action_media(action)
         

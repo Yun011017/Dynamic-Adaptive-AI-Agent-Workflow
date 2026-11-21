@@ -39,7 +39,7 @@ class MetaAdapterPayloadTests(unittest.TestCase):
         self.assertEqual(payload["image_url"], "https://images.example.test/cover.jpg")
         self.assertEqual(payload["caption"], "Build with us\n\n#NTUMaker")
 
-    def test_registration_url_is_added_to_caption_and_meta_input(self):
+    def test_registration_url_does_not_override_human_caption(self):
         payload = _payload(
             SimpleNamespace(id=12, version=1),
             ContentDraftCreate(
@@ -48,8 +48,9 @@ class MetaAdapterPayloadTests(unittest.TestCase):
                 image_urls=["https://images.example.test/cover.jpg"],
             ),
         )
-        self.assertEqual(payload["caption"], "一起來動手做！\n\n報名連結：https://signup.example.test/workshop")
-        self.assertIn("https://signup.example.test/workshop", payload["meta_adapter_payload"]["caption"])
+        self.assertEqual(payload["caption"], "一起來動手做！")
+        self.assertNotIn("https://signup.example.test/workshop", payload["meta_adapter_payload"]["caption"])
+        self.assertEqual(payload["signup_url"], "https://signup.example.test/workshop")
 
     def test_video_requirements_are_preserved(self):
         draft = ContentDraftCreate(

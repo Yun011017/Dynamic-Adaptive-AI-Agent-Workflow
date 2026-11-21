@@ -218,6 +218,32 @@ class ApprovalAndPublishTests(unittest.TestCase):
 
         check_media.assert_called_once_with(action)
         self.assertEqual(action.status, "PENDING_REVIEW")
+
+    @patch("app.services.approval_service.validate_action_media")
+    def test_manual_public_video_url_can_submit_without_video_requirement(self, check_media):
+        db = MagicMock()
+        action = ExecutionAction(
+            id=4,
+            workspace_id=1,
+            draft_version=1,
+            content_hash="valid_hash",
+            status="DRAFT",
+            payload={
+                "scheduled_at": "2030-01-01T00:00:00+00:00",
+                "post_format": "reel",
+                "image_requirements": [],
+                "video_requirements": [],
+                "image_urls": [],
+                "video_urls": ["https://cdn.example.test/reel.mp4"],
+                "meta_adapter_payload": {"media_type": "REELS"},
+            },
+        )
+
+        approval = ApprovalService.submit_for_review(db, action=action)
+
+        check_media.assert_called_once_with(action)
+        self.assertEqual(action.status, "PENDING_REVIEW")
+        self.assertEqual(approval.status, "PENDING_REVIEW")
         self.assertEqual(approval.status, "PENDING_REVIEW")
 
 
