@@ -270,7 +270,14 @@ def create_draft(strategy_id: int, data: ContentDraftCreate, db: DB, tenant: Ten
 def list_drafts(strategy_id: int, db: DB, tenant: Tenant, limit: int = 50):
     if not 1 <= limit <= 100:
         raise HTTPException(422, "Invalid limit")
-    scoped(db, Strategy, strategy_id, tenant)
+    strategy = scoped(db, Strategy, strategy_id, tenant)
+    # The UI selects the newest Strategy for a Goal. Content proposals made
+    # from an earlier Strategy version still belong to that same Goal and must
+    # remain visible as part of its proposal history.
+    strategy_ids = select(Strategy.id).where(
+        Strategy.workspace_id == tenant,
+        Strategy.goal_id == strategy.goal_id,
+    )
     return read_with_retry(
         lambda: db.scalars(
             select(ExecutionAction)
@@ -278,7 +285,9 @@ def list_drafts(strategy_id: int, db: DB, tenant: Tenant, limit: int = 50):
             .where(
                 ExecutionAction.workspace_id == tenant,
                 Execution.workspace_id == tenant,
-                Execution.strategy_id == strategy_id,
+                Execution.strategy_id.in_(strategy_ids),
+                ExecutionAction.tool == "meta_api",
+                ExecutionAction.operation == "instagram_publish",
             )
             .order_by(ExecutionAction.created_at.desc(), ExecutionAction.id.desc())
             .limit(limit)

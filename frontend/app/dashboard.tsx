@@ -10,6 +10,8 @@ const labels = {
   DRAFT: "待編修",
   PENDING_REVIEW: "待審核",
   SCHEDULED: "已排程",
+  EXECUTING: "發布中",
+  SUCCEEDED: "已發布",
   SUPERSEDED: "已由新版取代",
 };
 const colors = {
@@ -20,6 +22,8 @@ const colors = {
   DRAFT: "bg-stone-100 text-stone-700",
   PENDING_REVIEW: "bg-amber-100 text-amber-800",
   SCHEDULED: "bg-orange-100 text-orange-900",
+  EXECUTING: "bg-blue-100 text-maker-blue",
+  SUCCEEDED: "bg-emerald-100 text-emerald-800",
   SUPERSEDED: "bg-stone-100 text-stone-500",
 };
 const goalMetrics = [
@@ -1074,8 +1078,9 @@ export default function Dashboard() {
     ),
   ];
   const activeDrafts = draftsForSelectedStrategy.filter(
-    (draft) => !["SUPERSEDED", "EXECUTING", "SUCCEEDED"].includes(draft.status),
+    (draft) => draft.status !== "SUPERSEDED",
   );
+  const isViewingPublishedDraft = editingDraft?.status === "SUCCEEDED";
   const revisionHistory = editingDraft
     ? drafts
         .filter((draft) => draft.execution_id === editingDraft.execution_id)
@@ -1603,7 +1608,9 @@ export default function Dashboard() {
               >
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="m-0 text-lg">
-                    {editingDraft
+                    {isViewingPublishedDraft
+                      ? `查看已發布提案 ${proposalVersion(editingDraft!)}`
+                      : editingDraft
                       ? `修改內容提案 ${proposalVersion(editingDraft)}`
                       : "新增內容提案"}
                   </h3>
@@ -1885,6 +1892,10 @@ export default function Dashboard() {
                       {draftSaving ? "建立新版本中…" : "修改內容並重新送審"}
                     </button>
                   </div>
+                ) : isViewingPublishedDraft ? (
+                  <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-900">
+                    此提案已成功發布，內容保留供查看；如需發布新貼文，請新增內容提案。
+                  </p>
                 ) : (
                   <button
                     disabled={draftSaving}
@@ -1973,6 +1984,11 @@ export default function Dashboard() {
                           {draft.status === "SUCCEEDED" && (
                             <span className="font-mono text-xs font-semibold text-emerald-700">
                               ✓ 已成功發布 (ID: {draft.external_id})
+                            </span>
+                          )}
+                          {draft.status === "FAILED" && (
+                            <span className="text-xs font-semibold text-red-700">
+                              發布失敗；可點擊上方卡片，以此版本建立新提案後重新送審。
                             </span>
                           )}
                         </div>
