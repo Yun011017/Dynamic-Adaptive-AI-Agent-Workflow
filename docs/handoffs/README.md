@@ -15,3 +15,4 @@
 - [2026-11-01｜表單同步與 Agent 分析｜交接文件](2026-10-31-form-agent-neon.md)：新增學校、系級客群與參加活動名稱，包含 migration、設定與驗證。
 - [2026-10-26｜Agent Worker 部署｜驗收文件](2026-10-26-agent-worker-actions.md)：目前的 worker 部署方式與待完成驗收，以此文件為準。
 - [2026-10-26｜FastAPI Neon Agent 整合｜歷史交接](2026-10-26-feng-agent-platform.md)：保留作為平台整合歷史紀錄；目前 worker 以 GitHub Actions 排程執行。
+- [2026-11-21｜評估結果自動建立下一版策略](2026-11-21-evaluation-strategy-v2.md)：評估建議進入 Agent 工作並建立後續 Strategy 版本，含 Gemini 驗證、重試與重新評估方式。

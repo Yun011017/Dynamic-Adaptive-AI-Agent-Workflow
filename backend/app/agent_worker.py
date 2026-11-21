@@ -203,6 +203,10 @@ def save_strategy(db: Session, row: AgentRun, recommendation: dict, source_refs:
     if signup_url:
         strategy_fields["signup_url"] = signup_url
     strategy_fields["data_source"] = source_refs
+    if row.input_payload.get("job_type") == "EVALUATION_FOLLOWUP":
+        strategy_fields["source_execution_id"] = row.input_payload["source_execution_id"]
+        strategy_fields["source_strategy_id"] = row.input_payload["source_strategy_id"]
+        strategy_fields["source_agent_run_id"] = row.run_id
     strategy = Strategy(
         workspace_id=row.workspace_id,
         goal_id=row.goal_id,
@@ -276,6 +280,7 @@ def process_one_run(run_id: str | None = None) -> str | None:
         payload = row.input_payload
         workspace_id, provider, model_name = row.workspace_id, row.agent_provider, row.agent_model
         checkpoint(db, row, "RUNNING", {"input": payload, "attempt": row.attempts})
+        form_sync = None
         try:
             if payload.get("job_type") == "CONTENT_DRAFT":
                 output = create_generated_content_draft(db, row)
