@@ -356,6 +356,7 @@ export default function Dashboard() {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [drafts, setDrafts] = useState<ContentDraft[]>([]);
   const [scheduledDrafts, setScheduledDrafts] = useState<ContentDraft[]>([]);
+  const [publicationDrafts, setPublicationDrafts] = useState<ContentDraft[]>([]);
   const [selectedStrategy, setSelectedStrategy] = useState<number | null>(null);
   const [draftForm, setDraftForm] = useState(blankDraft);
   const [editingDraft, setEditingDraft] = useState<ContentDraft | null>(null);
@@ -456,6 +457,16 @@ export default function Dashboard() {
     });
     setScheduledDrafts(scheduled);
   };
+  const loadPublicationHistory = async () => {
+    if (!key) {
+      setPublicationDrafts([]);
+      return;
+    }
+    const published = (await call(
+      "/content-drafts/publication-history",
+    )) as ContentDraft[];
+    setPublicationDrafts(published);
+  };
   const refreshDrafts = async (showFeedback = false) => {
     if (!selectedStrategy) return;
     setDraftRefreshing(true);
@@ -522,6 +533,9 @@ export default function Dashboard() {
   }, [selectedStrategy, key, base]);
   useEffect(() => {
     loadScheduledDrafts().catch(() => setScheduledDrafts([]));
+  }, [key, base]);
+  useEffect(() => {
+    loadPublicationHistory().catch(() => setPublicationDrafts([]));
   }, [key, base]);
   useEffect(() => {
     if (!feedback) return;
@@ -1096,9 +1110,7 @@ export default function Dashboard() {
   const activeDrafts = draftsForSelectedStrategy.filter(
     (draft) => draft.status !== "SUPERSEDED",
   );
-  const publicationHistory = draftsForSelectedStrategy
-    .filter((draft) => ["EXECUTING", "SUCCEEDED", "FAILED"].includes(draft.status))
-    .sort((a, b) => b.id - a.id);
+  const publicationHistory = publicationDrafts;
   const isViewingPublishedDraft = editingDraft?.status === "SUCCEEDED";
   const revisionHistory = editingDraft
     ? drafts
@@ -2115,7 +2127,10 @@ export default function Dashboard() {
           </span>
         </div>
         {scheduledDrafts.length ? (
-          <ul className="mt-4 grid list-none gap-3 p-0 md:grid-cols-2">
+          <ul
+            className="mt-4 grid max-h-[28rem] list-none gap-3 overflow-y-auto pr-2 [scrollbar-gutter:stable] md:grid-cols-2"
+            aria-label="所有發布紀錄"
+          >
             {scheduledDrafts.map((draft) => (
               <li
                 key={draft.id}
@@ -2161,7 +2176,7 @@ export default function Dashboard() {
               發布紀錄
             </h2>
             <p className="mb-0 text-sm text-maker-muted">
-              顯示目前選擇 Strategy 的已發布、發布中與發布失敗提案。
+              顯示此工作區所有 Strategy 的已發布、發布中與發布失敗提案。
             </p>
           </div>
           <span className="rounded-full bg-stone-100 px-3 py-1 text-sm font-semibold text-maker-blue">
@@ -2220,7 +2235,7 @@ export default function Dashboard() {
           </ul>
         ) : (
           <p className="mb-0 mt-4 rounded-xl border border-dashed border-stone-200 bg-stone-50 p-5 text-center text-sm text-maker-muted">
-            此 Strategy 尚無發布紀錄。
+            目前尚無發布紀錄。
           </p>
         )}
       </section>
