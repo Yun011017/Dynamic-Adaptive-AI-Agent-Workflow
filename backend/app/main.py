@@ -329,7 +329,14 @@ def create_draft(strategy_id: int, data: ContentDraftCreate, db: DB, tenant: Ten
 def list_drafts(strategy_id: int, db: DB, tenant: Tenant, limit: int = 50):
     if not 1 <= limit <= 100:
         raise HTTPException(422, "Invalid limit")
-    scoped(db, Strategy, strategy_id, tenant)
+    strategy = scoped(db, Strategy, strategy_id, tenant)
+    # The UI selects the newest Strategy for a Goal. Content proposals made
+    # from an earlier Strategy version still belong to that same Goal and must
+    # remain visible as part of its proposal history.
+    strategy_ids = select(Strategy.id).where(
+        Strategy.workspace_id == tenant,
+        Strategy.goal_id == strategy.goal_id,
+    )
     return read_with_retry(
         lambda: db.scalars(
             select(ExecutionAction)
@@ -337,7 +344,9 @@ def list_drafts(strategy_id: int, db: DB, tenant: Tenant, limit: int = 50):
             .where(
                 ExecutionAction.workspace_id == tenant,
                 Execution.workspace_id == tenant,
-                Execution.strategy_id == strategy_id,
+                Execution.strategy_id.in_(strategy_ids),
+                ExecutionAction.tool == "meta_api",
+                ExecutionAction.operation == "instagram_publish",
             )
             .order_by(ExecutionAction.created_at.desc(), ExecutionAction.id.desc())
             .limit(limit)
@@ -598,6 +607,7 @@ from app.models import ApprovalRequest
 from app.schemas import ApprovalDecisionRequest, ApprovalRequestRead, PublishActionRequest
 from app.services.approval_service import ApprovalService
 from app.services.publisher_service import InstagramPublisherService
+from app.services.publishing_audit import record_publish_failure, record_publish_success
 
 @app.post("/actions/{action_id}/approval-requests", response_model=ApprovalRequestRead, status_code=201)
 def submit_action_for_review(action_id: int, db: DB, tenant: Tenant):
@@ -697,5 +707,12 @@ async def execute_action(action_id: int, db: DB, tenant: Tenant, data: PublishAc
     )
     
     # 執行前置檢查與受控發布
-    external_id = await InstagramPublisherService.publish_action(db, action, approval)
+    try:
+        external_id = await InstagramPublisherService.publish_action(db, action, approval)
+    except Exception as exc:
+        record_publish_failure(action, exc)
+        db.commit()
+        raise
+    record_publish_success(action, external_id)
+    db.commit()
     return {"message": "發布成功", "action_id": action.id, "external_id": external_id, "status": "SUCCEEDED"}

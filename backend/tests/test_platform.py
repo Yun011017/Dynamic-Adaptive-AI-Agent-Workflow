@@ -600,7 +600,40 @@ class PlatformTests(unittest.TestCase):
             self.assertEqual(previous.status, "SUPERSEDED")
             self.assertEqual(db.query(Execution).filter_by(strategy_id=strategy["id"]).count(), 1)
 
-    def test_16_strategy_regeneration_versions_and_draft_links(self):
+    def test_16_latest_strategy_includes_same_goal_draft_history(self):
+        goal = self.client.post(
+            "/goals", headers=self.headers, json={"title": "Shared draft history goal"}
+        ).json()
+        first_strategy = self.client.post(
+            f"/goals/{goal['id']}/strategies",
+            headers=self.headers,
+            json={"version": 1, "content": "First direction"},
+        ).json()
+        draft = self.client.post(
+            f"/strategies/{first_strategy['id']}/content-drafts",
+            headers=self.headers,
+            json={
+                "channel": "instagram",
+                "caption": "A saved proposal from the first strategy version",
+                "image_requirements": ["cover"],
+                "image_urls": ["https://images.example.test/cover.jpg"],
+            },
+        )
+        self.assertEqual(draft.status_code, 201, draft.text)
+        latest_strategy = self.client.post(
+            f"/goals/{goal['id']}/strategies",
+            headers=self.headers,
+            json={"version": 2, "content": "Second direction"},
+        ).json()
+
+        listed = self.client.get(
+            f"/strategies/{latest_strategy['id']}/content-drafts",
+            headers=self.headers,
+        )
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual([item["id"] for item in listed.json()], [draft.json()["id"]])
+
+    def test_17_strategy_regeneration_versions_and_draft_links(self):
         goal = self.client.post(
             "/goals", headers=self.headers, json={"title": "Versioned strategy goal"}
         ).json()

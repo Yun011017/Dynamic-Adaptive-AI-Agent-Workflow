@@ -11,6 +11,8 @@ const labels = {
   DRAFT: "待編修",
   PENDING_REVIEW: "待審核",
   SCHEDULED: "已排程",
+  EXECUTING: "發布中",
+  SUCCEEDED: "已發布",
   SUPERSEDED: "已由新版取代",
 };
 const colors = {
@@ -21,6 +23,8 @@ const colors = {
   DRAFT: "bg-stone-100 text-stone-700",
   PENDING_REVIEW: "bg-amber-100 text-amber-800",
   SCHEDULED: "bg-orange-100 text-orange-900",
+  EXECUTING: "bg-blue-100 text-maker-blue",
+  SUCCEEDED: "bg-emerald-100 text-emerald-800",
   SUPERSEDED: "bg-stone-100 text-stone-500",
 };
 const goalMetrics = [
@@ -83,6 +87,13 @@ type ContentDraft = {
     strategy_id?: number;
     proposal_version?: number;
     external_id?: string | null; // 若後端同時放進 payload，也可選填
+    publish_result?: {
+      status?: "SUCCEEDED" | "FAILED";
+      external_id?: string;
+      published_at?: string;
+      failed_at?: string;
+      message?: string;
+    };
   };
 };
 type ApprovalItem = {
@@ -105,6 +116,14 @@ function Pill({ status }) {
     </span>
   );
 }
+
+function formatTaipeiTime(value?: string | null) {
+  if (!value) return "—";
+  return new Date(value).toLocaleString("zh-TW", {
+    timeZone: "Asia/Taipei",
+  });
+}
+
 function Field({ label, children }) {
   return (
     <label className="block text-sm font-semibold">
@@ -1075,8 +1094,12 @@ export default function Dashboard() {
     ),
   ];
   const activeDrafts = draftsForSelectedStrategy.filter(
-    (draft) => !["SUPERSEDED", "EXECUTING", "SUCCEEDED"].includes(draft.status),
+    (draft) => draft.status !== "SUPERSEDED",
   );
+  const publicationHistory = draftsForSelectedStrategy
+    .filter((draft) => ["EXECUTING", "SUCCEEDED", "FAILED"].includes(draft.status))
+    .sort((a, b) => b.id - a.id);
+  const isViewingPublishedDraft = editingDraft?.status === "SUCCEEDED";
   const revisionHistory = editingDraft
     ? drafts
         .filter((draft) => draft.execution_id === editingDraft.execution_id)
@@ -1606,7 +1629,9 @@ export default function Dashboard() {
               >
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="m-0 text-lg">
-                    {editingDraft
+                    {isViewingPublishedDraft
+                      ? `查看已發布提案 ${proposalVersion(editingDraft!)}`
+                      : editingDraft
                       ? `修改內容提案 ${proposalVersion(editingDraft)}`
                       : "新增內容提案"}
                   </h3>
@@ -1888,6 +1913,10 @@ export default function Dashboard() {
                       {draftSaving ? "建立新版本中…" : "修改內容並重新送審"}
                     </button>
                   </div>
+                ) : isViewingPublishedDraft ? (
+                  <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-900">
+                    此提案已成功發布，內容保留供查看；如需發布新貼文，請新增內容提案。
+                  </p>
                 ) : (
                   <button
                     disabled={draftSaving}
@@ -1976,6 +2005,11 @@ export default function Dashboard() {
                           {draft.status === "SUCCEEDED" && (
                             <span className="font-mono text-xs font-semibold text-emerald-700">
                               ✓ 已成功發布 (ID: {draft.external_id})
+                            </span>
+                          )}
+                          {draft.status === "FAILED" && (
+                            <span className="text-xs font-semibold text-red-700">
+                              發布失敗；可點擊上方卡片，以此版本建立新提案後重新送審。
                             </span>
                           )}
                         </div>
@@ -2111,6 +2145,82 @@ export default function Dashboard() {
         ) : (
           <p className="mb-0 mt-4 rounded-xl border border-dashed border-orange-200 bg-white/70 p-5 text-center text-sm text-maker-muted">
             尚未有審核完成的內容加入排程。
+          </p>
+        )}
+      </section>
+      <section
+        className="mt-5 rounded-2xl border border-maker-line bg-white p-6 shadow-panel"
+        aria-labelledby="publication-heading"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="m-0 font-mono text-xs font-semibold tracking-[.12em] text-maker-blue">
+              PUBLISHING
+            </p>
+            <h2 id="publication-heading" className="mt-1 text-xl">
+              發布紀錄
+            </h2>
+            <p className="mb-0 text-sm text-maker-muted">
+              顯示目前選擇 Strategy 的已發布、發布中與發布失敗提案。
+            </p>
+          </div>
+          <span className="rounded-full bg-stone-100 px-3 py-1 text-sm font-semibold text-maker-blue">
+            {publicationHistory.length} 則
+          </span>
+        </div>
+        {publicationHistory.length ? (
+          <ul className="mt-4 grid list-none gap-3 p-0 md:grid-cols-2">
+            {publicationHistory.map((draft) => {
+              const result = draft.payload.publish_result;
+              const publishedAt = result?.published_at || null;
+              const failedAt = result?.failed_at || null;
+              return (
+                <li key={draft.id} className="rounded-xl border border-maker-line p-4">
+                  <button
+                    type="button"
+                    onClick={() => beginRevision(draft)}
+                    className="w-full text-left"
+                  >
+                    <span className="flex flex-wrap items-center justify-between gap-2">
+                      <strong>{draft.payload.title || `提案 ${proposalVersion(draft)}`}</strong>
+                      <Pill status={draft.status} />
+                    </span>
+                    <p className="mb-0 mt-2 line-clamp-2 text-sm text-maker-muted">
+                      {draft.payload.caption || "尚無貼文內容"}
+                    </p>
+                  </button>
+                  <div className="mt-3 border-t border-stone-200 pt-3 text-sm">
+                    {draft.status === "SUCCEEDED" && (
+                      <>
+                        <p className="m-0 text-maker-muted">
+                          發布時間：{formatTaipeiTime(publishedAt)}
+                        </p>
+                        <p className="mb-0 mt-1 break-all font-mono text-xs text-emerald-700">
+                          Meta 貼文 ID：{draft.external_id || result?.external_id || "尚未回傳"}
+                        </p>
+                      </>
+                    )}
+                    {draft.status === "EXECUTING" && (
+                      <p className="m-0 text-maker-muted">Meta 正在處理素材與發布貼文。</p>
+                    )}
+                    {draft.status === "FAILED" && (
+                      <>
+                        <p className="m-0 text-maker-muted">
+                          失敗時間：{formatTaipeiTime(failedAt)}
+                        </p>
+                        <p className="mb-0 mt-1 text-red-700">
+                          原因：{result?.message || "此舊紀錄尚未保存失敗原因；可建立新版本後重新送審。"}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="mb-0 mt-4 rounded-xl border border-dashed border-stone-200 bg-stone-50 p-5 text-center text-sm text-maker-muted">
+            此 Strategy 尚無發布紀錄。
           </p>
         )}
       </section>
