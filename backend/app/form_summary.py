@@ -44,10 +44,11 @@ def summarize_responses(responses, *, source_id):
     return summary
 
 
-def get_form_summary(*, workspace_id=None):
+def get_form_summary(*, workspace_id=None, goal_id=None):
     """Only aggregate typed fields from the configured source and authorized workspace."""
     from .db import SessionLocal
     from .models import ExternalEvent, FormResponse, Workspace
+    from .form_sources import activity_source_ids
 
     with SessionLocal() as db:
         if workspace_id is None:
@@ -57,6 +58,7 @@ def get_form_summary(*, workspace_id=None):
             raise ValueError("Active workspace not found")
         if workspace_id is None:
             raise ValueError("Configured active workspace not found")
+        source_ids = activity_source_ids(db, workspace_id, goal_id)
         responses = db.execute(select(
             FormResponse.is_member, FormResponse.will_attend, FormResponse.school,
             FormResponse.department_grade, FormResponse.activity_name,
@@ -64,10 +66,10 @@ def get_form_summary(*, workspace_id=None):
         ).join(ExternalEvent, (ExternalEvent.id == FormResponse.external_event_id)
                & (ExternalEvent.workspace_id == FormResponse.workspace_id)).where(
             FormResponse.workspace_id == workspace_id,
-            FormResponse.source_id == settings.google_forms_source_id,
+            FormResponse.source_id.in_(source_ids),
             ExternalEvent.provider == PROVIDER,
-            ExternalEvent.source_account == settings.google_forms_source_id,
+            ExternalEvent.source_account == FormResponse.source_id,
             ExternalEvent.event_type == "form_response",
             ExternalEvent.source_version == "content-sha256-v1",
         )).mappings().all()
-    return summarize_responses(responses, source_id=settings.google_forms_source_id)
+    return summarize_responses(responses, source_id=','.join(sorted(source_ids)) or f'goal:{goal_id}:no-source')

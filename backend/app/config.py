@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     google_forms_department_grade_column: str = "系級"
     google_forms_activity_column: str = "參加的活動"
     google_forms_submitted_at_column: str = "時間戳記"
+    google_forms_email_column: str = "電子郵件地址"
+    google_forms_name_column: str = "姓名"
+    google_forms_source_column: str = "文案來源"
+    # Explicit mapping for this experiment; never infer an execution from its order.
+    google_forms_execution_map: dict[str, int] = {}
+    # Empty means timezone-less timestamps remain invalid.
+    google_forms_naive_timezone: str = ""
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parents[1] / ".env",

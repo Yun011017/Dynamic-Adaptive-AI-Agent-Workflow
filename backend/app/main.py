@@ -21,6 +21,12 @@ from .models import AgentRun, AgentRunCheckpoint, Execution, ExecutionAction, Go
 from .retry import read_with_retry
 from .schemas import AgentRunCreate, AgentRunRead, ApprovedScheduleUpdate, ContentDraftCreate, ContentDraftGenerateRequest, ContentDraftRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead, MediaUploadPresignRequest, MediaUploadPresignRead, UploadedMediaRead
 from .services.media_storage import cleanup_expired_media_assets, complete_direct_upload, create_direct_upload, upload_media_via_proxy
+from .form_bindings import bind_form_source, list_form_sources
+from .schemas import FormBindingCreate
+from .schemas import FormSourceCreate, FormSourceUpdate
+from .form_sources import create_source, source_read, sync_registered_source
+from .models import FormSource
+from .form_sync import FormSyncError
 
 app = FastAPI(title="Dynamic Adaptive AI Agent Workflow", version="0.2.0")
 evaluation_graph = build_evaluation_graph()
@@ -196,6 +202,59 @@ def create_execution_record(strategy_id: int, db: DB, tenant: Tenant):
 @app.get("/executions/{execution_id}", response_model=ExecutionRead)
 def get_execution(execution_id: int, db: DB, tenant: Tenant):
     return scoped(db, Execution, execution_id, tenant)
+
+
+@app.get('/strategies/{strategy_id}/executions', response_model=list[ExecutionRead])
+def list_strategy_executions(strategy_id: int, db: DB, tenant: Tenant):
+    scoped(db, Strategy, strategy_id, tenant)
+    return db.scalars(select(Execution).where(Execution.workspace_id == tenant,
+                                            Execution.strategy_id == strategy_id).order_by(Execution.id.desc())).all()
+
+
+@app.get('/form-sources')
+def get_form_sources(db: DB, tenant: Tenant):
+    return list_form_sources(db, tenant)
+
+
+@app.get('/form-source-configs')
+def get_form_source_configs(db: DB, tenant: Tenant):
+    return [source_read(row) for row in db.scalars(select(FormSource).where(
+        FormSource.workspace_id == tenant).order_by(FormSource.id.desc()))]
+
+
+@app.post('/form-source-configs', status_code=201)
+def add_form_source(data: FormSourceCreate, db: DB, tenant: Tenant):
+    row = create_source(db, tenant, data)
+    result = source_read(row)
+    db.commit()
+    return result
+
+
+@app.patch('/form-source-configs/{source_pk}')
+def update_form_source(source_pk: int, data: FormSourceUpdate, db: DB, tenant: Tenant):
+    db.scalar(select(Workspace.id).where(Workspace.id == tenant).with_for_update())
+    row = scoped(db, FormSource, source_pk, tenant)
+    row.enabled = data.enabled
+    result = source_read(row)
+    db.commit()
+    return result
+
+
+@app.post('/form-source-configs/{source_pk}/sync')
+def sync_form_source(source_pk: int, db: DB, tenant: Tenant):
+    # End the authentication read transaction before network I/O.
+    db.rollback()
+    try:
+        return sync_registered_source(source_pk, tenant)
+    except FormSyncError as error:
+        raise HTTPException(502, str(error)) from None
+
+
+@app.post('/executions/{execution_id}/form-bindings')
+def create_form_binding(execution_id: int, data: FormBindingCreate, db: DB, tenant: Tenant):
+    result = bind_form_source(db, tenant, execution_id, data.source_id, data.copy_source)
+    db.commit()
+    return result
 
 
 @app.get("/executions/{execution_id}/evaluation")

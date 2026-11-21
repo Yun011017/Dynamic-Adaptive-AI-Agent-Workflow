@@ -7,7 +7,7 @@ from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, build_opener
 
-from sqlalchemy import select
+from sqlalchemy import select, func, or_
 from sqlalchemy.dialects.postgresql import insert
 
 from .config import settings
@@ -27,7 +27,7 @@ def validate_url(url, *, redirect=False):
         valid = (parsed.scheme == 'https' and parsed.hostname in hosts
                  and not parsed.username and not parsed.password and parsed.port in (None, 443))
         if not redirect:
-            valid = valid and parsed.path.startswith('/macros/s/') and parsed.path.endswith('/exec')
+            valid = valid and parsed.path.startswith('/macros/s/') and parsed.path.endswith('/exec') and not parsed.fragment
     except ValueError:
         valid = False
     if not valid:
@@ -40,8 +40,8 @@ class GoogleRedirects(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def fetch_table():
-    url = settings.google_forms_apps_script_url.strip()
+def fetch_table(url=None):
+    url = (settings.google_forms_apps_script_url if url is None else url).strip()
     validate_url(url)
     try:
         with build_opener(GoogleRedirects()).open(url, timeout=20) as response:
@@ -58,6 +58,27 @@ def fetch_table():
 
 def parse_responses(table):
     """Preserve cells and header names exactly; canonical JSON supplies identity."""
+    if isinstance(table, dict):
+        if table.get('success') is not True or not isinstance(table.get('data'), dict):
+            raise FormSyncError('Invalid Apps Script result envelope')
+        groups = table['data']
+        if not groups or set(groups) - {'人工', 'ai'}:
+            raise FormSyncError('Expected human/ai response groups')
+        records = []
+        source_column = settings.google_forms_source_column
+        for source, rows in groups.items():
+            if not isinstance(rows, list):
+                raise FormSyncError('Expected response records in each group')
+            for row in rows:
+                if not isinstance(row, dict) or not row:
+                    raise FormSyncError('Expected nonempty response records')
+                if any(not isinstance(key, str) or not key.strip() for key in row):
+                    raise FormSyncError('Invalid response field names')
+                if source_column in row and row[source_column] != source:
+                    raise FormSyncError('Conflicting response source')
+                records.append({**row, source_column: source})
+        headers = sorted({key for row in records for key in row}) or [source_column]
+        table = [headers] + [[row.get(key) for key in headers] for row in records]
     if not isinstance(table, list) or not table or not isinstance(table[0], list):
         raise FormSyncError('Expected a table with a header row')
     headers = table[0]
@@ -80,19 +101,41 @@ def parse_responses(table):
     return results
 
 
-def save_responses(db, responses, *, workspace_slug, source_id):
+def save_responses(db, responses, *, workspace_slug, source_id, naive_timezone=None, use_legacy_mapping=True):
     """Caller commits the whole batch. ON CONFLICT also protects concurrent imports."""
     if not source_id.strip() or len(source_id) > 255:
         raise FormSyncError('Form source ID must be nonempty and at most 255 characters')
-    from .models import ExternalEvent, Workspace, FormResponse
+    from .models import ExternalEvent, Workspace, FormResponse, Execution, FormExecutionBinding
     from .form_fields import normalize_fields
 
-    workspace_id = db.scalar(select(Workspace.id).where(Workspace.slug == workspace_slug, Workspace.status == 'active'))
+    workspace_id = db.scalar(select(Workspace.id).where(Workspace.slug == workspace_slug, Workspace.status == 'active').with_for_update())
     if workspace_id is None:
         raise FormSyncError('Configured active workspace does not exist')
+    bindings = {row.copy_source: row.execution_id for row in db.scalars(
+        select(FormExecutionBinding).where(FormExecutionBinding.workspace_id == workspace_id,
+                                          FormExecutionBinding.source_id == source_id)).all()}
+    # Validate all attribution before writing any events. IDs belong to this tenant.
+    prepared = []
+    checked_executions = set()
+    for digest, answers in responses:
+        fields = normalize_fields(answers, naive_timezone=naive_timezone)
+        if 'copy_source:unknown_value' in fields['normalization_errors']:
+            raise FormSyncError('Unknown registration copy source')
+        fallback = settings.google_forms_execution_map.get(fields['copy_source']) if use_legacy_mapping else None
+        execution_id = bindings.get(fields['copy_source'], fallback)
+        if execution_id is not None and execution_id not in checked_executions:
+            if type(execution_id) is not int or execution_id <= 0:
+                raise FormSyncError('Invalid configured registration execution')
+            execution = db.scalar(select(Execution.id).where(
+                Execution.workspace_id == workspace_id, Execution.id == execution_id))
+            if execution is None:
+                raise FormSyncError('Registration execution does not belong to this workspace')
+            checked_executions.add(execution_id)
+        fields['execution_id'] = execution_id
+        prepared.append((digest, answers, fields))
     inserted = 0
     fetched_at = datetime.now(timezone.utc).isoformat()
-    for digest, answers in responses:
+    for digest, answers, fields in prepared:
         statement = insert(ExternalEvent).values(
             workspace_id=workspace_id, provider=PROVIDER, source_account=source_id,
             source_object_id=digest, source_version='content-sha256-v1',
@@ -108,16 +151,37 @@ def save_responses(db, responses, *, workspace_slug, source_id):
                 ExternalEvent.source_version == 'content-sha256-v1'))
         if event_id is None:
             raise FormSyncError('Cannot resolve stored form response')
-        fields = normalize_fields(answers)
-        db.execute(insert(FormResponse).values(
+        statement = insert(FormResponse).values(
             workspace_id=workspace_id, external_event_id=event_id, source_id=source_id, **fields,
-        ).on_conflict_do_update(constraint='uq_form_response_event', set_=fields))
+        )
+        updates = {**fields, 'execution_id': func.coalesce(FormResponse.execution_id, statement.excluded.execution_id)}
+        saved_id = db.scalar(statement.on_conflict_do_update(
+            constraint='uq_form_response_event', set_=updates,
+            where=or_(FormResponse.execution_id.is_(None), statement.excluded.execution_id.is_(None),
+                      FormResponse.execution_id == statement.excluded.execution_id),
+        ).returning(FormResponse.id))
+        if saved_id is None:
+            raise FormSyncError('Existing registration execution cannot be reassigned')
     return {'read': len(responses), 'inserted': inserted, 'skipped': len(responses) - inserted}
 
 
-def sync_once(*, workspace_id=None):
+def sync_once(*, workspace_id=None, goal_id=None):
     from .db import SessionLocal
-    from .models import Workspace
+    from .models import Workspace, FormSource
+    from .form_sources import sync_registered_source
+    with SessionLocal() as db:
+        scope = Workspace.id == workspace_id if workspace_id is not None else Workspace.slug == settings.platform_workspace_slug
+        registered = list(db.scalars(select(FormSource).join(Workspace, Workspace.id == FormSource.workspace_id)
+                                     .where(scope, Workspace.status == 'active')).all())
+        targets = [(row.id, row.workspace_id) for row in registered
+                   if row.enabled and (goal_id is None or row.goal_id == goal_id)]
+    if registered:
+        total = dict(read=0, inserted=0, skipped=0)
+        for pk, tenant in targets:
+            counts = sync_registered_source(pk, tenant)
+            for key in total:
+                total[key] += counts[key]
+        return total
     # Fetch and validate before opening a database transaction.
     responses = parse_responses(fetch_table())
     with SessionLocal.begin() as db:

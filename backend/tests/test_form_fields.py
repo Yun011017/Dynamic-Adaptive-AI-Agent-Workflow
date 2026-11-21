@@ -10,7 +10,8 @@ class FormFieldsTests(unittest.TestCase):
     def setUp(self):
         mappings = dict(google_forms_member_column='是否為社員', google_forms_attendance_column='是否要參加',
                         google_forms_school_column='學校', google_forms_department_grade_column='系級',
-                        google_forms_activity_column='參加的活動', google_forms_submitted_at_column='時間戳記')
+                        google_forms_activity_column='參加的活動', google_forms_submitted_at_column='時間戳記',
+                        google_forms_naive_timezone='')
         for name, value in mappings.items():
             patcher = patch.object(settings, name, value)
             patcher.start()
@@ -29,12 +30,25 @@ class FormFieldsTests(unittest.TestCase):
     def test_test_columns_do_not_become_business_fields(self):
         result = normalize_fields({'test': 1, 'temp': 6})
         self.assertIsNone(result['is_member'])
-        self.assertIsNone(result['will_attend'])
+        self.assertIs(result['will_attend'], True)
         self.assertIsNone(result['activity_name'])
         self.assertIsNone(result['school'])
         self.assertIsNone(result['department_grade'])
         self.assertIsNone(result['submitted_at'])
         self.assertEqual(result['normalization_errors'], [])
+
+    def test_attendance_defaults_true_only_when_missing_or_blank(self):
+        for answers in ({}, {'是否要參加': None}, {'是否要參加': ''}, {'是否要參加': ' 　'}):
+            with self.subTest(answers=answers):
+                result = normalize_fields(answers)
+                self.assertIs(result['will_attend'], True)
+                self.assertIsNone(result['is_member'])
+                self.assertEqual(result['normalization_errors'], [])
+        for value in ('否', '不參加', False):
+            self.assertIs(normalize_fields({'是否要參加': value})['will_attend'], False)
+        result = normalize_fields({'是否要參加': '尚未決定'})
+        self.assertIsNone(result['will_attend'])
+        self.assertEqual(result['normalization_errors'], ['will_attend:unknown_value'])
 
     def test_unknown_and_invalid_are_not_false(self):
         result = normalize_fields({'是否為社員': 1, '是否要參加': '尚未決定', '學校': 123, '時間戳記': '2026-10-31T12:00:00'})

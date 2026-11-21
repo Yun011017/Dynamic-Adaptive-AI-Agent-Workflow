@@ -17,7 +17,7 @@ from .content_generator import generate_content_draft
 from .form_sync import sync_once
 from .config import settings
 from .db import SessionLocal
-from .models import AgentRun, AgentRunCheckpoint, ExternalEvent, FormResponse, Goal, Observation, Strategy
+from .models import AgentRun, AgentRunCheckpoint, Execution, ExternalEvent, FormResponse, Goal, Observation, Strategy
 from .schemas import ContentDraftGenerateRequest
 
 import asyncio
@@ -125,6 +125,8 @@ def checkpoint(db: Session, row: AgentRun, phase: str, state_payload: dict) -> N
 
 def load_strategy_context(db: Session, *, workspace_id: int, goal_id: int) -> tuple[list[dict], dict]:
     """Load source IDs and existing observations for the strategy snapshot."""
+    from .form_sources import activity_source_ids
+    source_ids = activity_source_ids(db, workspace_id, goal_id)
     form_sources = db.execute(
         select(FormResponse.id, FormResponse.external_event_id)
         .join(
@@ -134,13 +136,20 @@ def load_strategy_context(db: Session, *, workspace_id: int, goal_id: int) -> tu
         )
         .where(
             FormResponse.workspace_id == workspace_id,
+            FormResponse.source_id.in_(source_ids),
             ExternalEvent.event_type == "form_response",
         )
         .order_by(FormResponse.id),
     ).all()
     observations = db.scalars(
         select(Observation)
-        .where(Observation.workspace_id == workspace_id)
+        .where(Observation.workspace_id == workspace_id, or_(
+            Observation.strategy_id.in_(select(Strategy.id).where(
+                Strategy.workspace_id == workspace_id, Strategy.goal_id == goal_id)),
+            Observation.execution_id.in_(select(Execution.id).join(
+                Strategy, (Strategy.id == Execution.strategy_id) & (Strategy.workspace_id == Execution.workspace_id)
+            ).where(Execution.workspace_id == workspace_id, Strategy.goal_id == goal_id)),
+        ))
         .order_by(Observation.observed_at.desc(), Observation.id.desc())
         .limit(200)
     ).all()
@@ -205,11 +214,11 @@ def save_strategy(db: Session, row: AgentRun, recommendation: dict, source_refs:
     return strategy
 
 
-def refresh_form_data(workspace_id: int) -> dict:
+def refresh_form_data(workspace_id: int, goal_id: int) -> dict:
     """Sync in a separate transaction; failed imports roll back before cached reads."""
     attempted_at = datetime.now(timezone.utc).isoformat()
     try:
-        counts = sync_once(workspace_id=workspace_id)
+        counts = sync_once(workspace_id=workspace_id, goal_id=goal_id)
         return {"status": "succeeded", "attempted_at": attempted_at, **counts}
     except Exception:
         # Provider and database exceptions can contain URLs, answers or SQL parameters.
@@ -269,12 +278,12 @@ def process_one_run(run_id: str | None = None) -> str | None:
                 form_sync = None
             else:
                 # The analysis job refreshes before reading its bounded Neon summary.
-                form_sync = refresh_form_data(workspace_id)
                 goal_id = row.goal_id or payload.get("goal_id")
                 if not isinstance(goal_id, int) or isinstance(goal_id, bool):
                     raise ValueError("Agent run goal_id is missing")
                 if row.goal_id is not None and payload.get("goal_id") != row.goal_id:
                     raise ValueError("Agent run goal_id is inconsistent")
+                form_sync = refresh_form_data(workspace_id, goal_id)
                 observation_rows, source_refs = load_strategy_context(
                     db, workspace_id=workspace_id, goal_id=goal_id
                 )

@@ -60,6 +60,54 @@ class StrategyRead(StrategyCreate):
     goal_id: int
     created_at: datetime
 
+class FormSourceCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    goal_id: int = Field(gt=0)
+    apps_script_url: str = Field(min_length=1, max_length=2048)
+    timezone: str = Field(default='Asia/Taipei', min_length=1, max_length=64)
+
+    @field_validator('name')
+    @classmethod
+    def clean_name(cls, value):
+        if not value.strip():
+            raise ValueError('請輸入表單名稱')
+        return value.strip()
+
+    @field_validator('apps_script_url')
+    @classmethod
+    def valid_endpoint(cls, value):
+        from .form_sync import validate_url
+        validate_url(value.strip())
+        return value.strip()
+
+    @field_validator('timezone')
+    @classmethod
+    def valid_timezone(cls, value):
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(value)
+        except (ValueError, ZoneInfoNotFoundError):
+            raise ValueError('請輸入有效時區，例如 Asia/Taipei') from None
+        return value
+
+
+class FormSourceUpdate(BaseModel):
+    enabled: bool
+
+
+class FormBindingCreate(BaseModel):
+    source_id: str = Field(min_length=1, max_length=255)
+    copy_source: Literal['人工', 'ai']
+
+    @field_validator('source_id')
+    @classmethod
+    def normalize_source_id(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError('請選擇表單來源')
+        return value
+
+
 class ExecutionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int

@@ -4,6 +4,52 @@
 
 ## 表單同步 Worker
 
+### 正式社團表單與人工／ai 歸因
+
+#### 在介面新增多活動表單
+
+Migration `0014` 新增 `form_sources`。在「內容提案」選擇策略後，於「報名表單綁定 → 新增表單」填寫名稱、Apps Script `/exec` 部署網址及試算表時區（預設 `Asia/Taipei`）。表單會自動歸屬目前策略的 Goal，即使尚無 Execution 也可先新增。新增不會呼叫 Google；儲存後按「同步回覆」讀取並匯入，再選擇人工／AI 來源綁定 Execution。Google 表單填寫網址、Sheets 編輯網址不是資料端點，不能直接填入。
+
+API：`GET/POST /form-source-configs` 列出／建立來源；`PATCH /form-source-configs/{id}` 接收 `{"enabled":false}` 以停用同步；`POST /form-source-configs/{id}/sync` 同步單一來源並回傳 read/inserted/skipped。清單與新增結果不回傳 Apps Script 網址（可能含存取金鑰），也不回傳個資。來源名稱、活動與時區以外的來源識別會自動產生；同一工作區的同一網址不可重複新增。來源的活動與網址建立後固定，避免歷史回覆被錯置。
+
+多個來源可以同時存在，Agent worker 只同步該次工作 Goal 的啟用來源；摘要及資料依據也只讀該活動的來源與觀測。每個來源各自一個交易，單一來源失敗不會刪除已保存回覆，先前成功來源不會回滾；worker 回報同步失敗並讀已保存資料。停用只停止同步，保留歷史資料與綁定，活動分析仍可讀取已保存回覆。正式欄位名稱沿用目前全域欄位對照，端點支援人工／ai 分組物件或含「文案來源」的二維陣列；每個來源可設定自己的時區。
+
+工作區尚無資料庫來源時，保留 `.env` 的單來源相容模式。登記來源後改以資料庫為準，未登記的舊來源不會混入活動分析。若新增的網址等於既有 `.env` 網址，會沿用原 source_id 以保留回覆與去重身份；已有其他活動綁定時拒絕轉移。舊表單可在其正確活動下登記原網址後繼續使用，不必重新匯入為新來源。
+
+Migration `0013` 新增 `form_execution_bindings`。在前端「內容提案」選擇策略後，可於「報名表單綁定」選擇 Execution 與已同步的表單來源（來源 ID＋人工／AI）並儲存。不需修改 `GOOGLE_FORMS_EXECUTION_MAP`；資料庫綁定優先於舊環境變數，同步時自動沿用。沒有 Execution 時先建立內容提案。綁定會在同一交易補齊該來源既有未關聯回覆，重複儲存不重複新增；來源或既有回覆已歸屬其他 Execution 時回傳 409，不支援重新歸因。匯入與綁定共用 workspace row lock，避免同步期間漏補回覆。
+
+API：`GET /form-sources` 僅列來源、組別、筆數與綁定 Execution，不回傳姓名或 Email；`GET /strategies/{strategy_id}/executions` 列出策略下的執行紀錄；`POST /executions/{execution_id}/form-bindings` 接收 `{"source_id":"club-copy-ab-2026-11","copy_source":"人工"}`。所有端點沿用 API key 與 workspace 限制。來源可在第一筆回覆前綁定目前已設定端點的人工／ai 組別。
+
+綁定本身不新增 KPI Observation；多活動網址由上述 `form_sources` 管理。來源使用後應保持固定，新的宣傳輪次請使用獨立來源。
+
+支援原有的二維陣列，以及 Apps Script 回傳的物件：
+
+```json
+{"success":true,"data":{"人工":[{"時間戳記":"2026-11-21T10:30:00+08:00","電子郵件地址":"member@example.test","姓名":"測試社員","是否是社員":"是"}],"ai":[]}}
+```
+
+每組內容必須是答案物件的陣列；來源由群組名稱補入 `文案來源`，僅接受 `人工`／`ai`。兩組相同答案仍各保留一筆；重跑及欄位／群組排序不會新增重複資料。空表單應回傳空陣列。來源衝突、未知群組或非純量答案會拒絕整批，不將 API 錯誤當成零筆回覆。
+
+Migration `0012` 在 `form_responses` 新增 `email`、`respondent_name`、`copy_source`、`execution_id`。前三者分別對照「電子郵件地址」「姓名」「文案來源」；社員對照「是否是社員」，選項是／否，其餘未知值保留 NULL。依報名規則，缺少參加意願題目或答案空白時預設為參加（true）；明確否定仍為 false，無法識別的非空答案仍為 NULL。原始答案仍保存在 `external_events.raw_payload.answers`；姓名與 Email 不加入既有 Agent 摘要。
+
+在 `backend/.env` 設定本次實驗使用的 Execution ID（以下為示意，必須替換）：
+
+```dotenv
+GOOGLE_FORMS_SOURCE_ID=club-ab-2026-11
+GOOGLE_FORMS_EXECUTION_MAP={"人工":101,"ai":102}
+GOOGLE_FORMS_EMAIL_COLUMN=電子郵件地址
+GOOGLE_FORMS_NAME_COLUMN=姓名
+GOOGLE_FORMS_SOURCE_COLUMN=文案來源
+```
+
+Execution 必須存在且屬於同一工作區，資料庫另以複合外鍵保護。未設定對照的來源仍會匯入，但 `execution_id=NULL`；稍後設定再同步可補齊。已建立的關聯不能用不同設定重新歸因，移除設定也不會清除關聯。每次實驗使用不同且固定的來源 ID 與表單資料來源，避免將歷史回覆歸給新 Execution。此關聯代表表單來源對照，不證明個別填表者確實看過貼文；尚未自動建立 KPI Observation。
+
+填表時間接受含時區的 ISO 8601（建議 Apps Script 用 `Date.toISOString()`）。若來源使用台灣時間且回傳無時區的 ISO、`YYYY/MM/DD HH:mm:ss` 或 `YYYY/MM/DD 上午/下午 h:mm:ss`，設定 `GOOGLE_FORMS_NAIVE_TIMEZONE=Asia/Taipei`；否則缺時區／無效時間保留 NULL 並記錄錯誤。中文時間明確處理上午／下午 12 點邊界，儲存時統一轉 UTC。
+
+先在 backend 目錄執行 `..\.venv\Scripts\python.exe -m scripts.manage migrate`，設定網址與對照後再執行 `..\.venv\Scripts\python.exe -m app.form_worker`，並重啟 Agent worker。舊資料可透過原來源重跑補欄位；來源中新增欄位會改變內容雜湊，須避免將同一批舊資料以不同欄位集合重複匯入。
+
+離線契約測試：`..\.venv\Scripts\python.exe -m unittest tests.test_registration_import tests.test_form_fields tests.test_form_sync -v`。PostgreSQL 的 `tests.test_platform.PlatformTests.test_official_registration_execution_attribution` 在隨機隔離 schema 驗證實際寫入、重跑、兩組 Execution 歸因及跨工作區外鍵，不讀取真實表單回覆。
+
 在 `backend/.env` 設定（實際網址只放本機或部署環境，不提交 Git）：
 
 ```dotenv
@@ -42,7 +88,7 @@ Migration `0005` 建立 `form_responses`；`0006` 新增學校、系級及活動
 | 欄位 | 型別 | 說明 |
 | --- | --- | --- |
 | is_member | nullable boolean | 是否為社員；是／否／未知 NULL 分開。 |
-| will_attend | nullable boolean | 是否參加；缺少題目或未知答案不推定為否。 |
+| will_attend | nullable boolean | 是否參加；缺少題目或空白預設 true，明確否定 false，未知非空答案 NULL。 |
 | school | nullable varchar(255) | 學校，供客群統計。 |
 | department_grade | nullable varchar(255) | 系級，保留合併文字，不猜測科系與年級。 |
 | activity_name | nullable varchar(255) | 參加的活動名稱，取代原活動日期用途。 |
@@ -62,7 +108,7 @@ GOOGLE_FORMS_ACTIVITY_COLUMN=參加的活動
 GOOGLE_FORMS_SUBMITTED_AT_COLUMN=時間戳記
 ```
 
-「是／否」、社員與參加的明確文字選項及布林值會轉成 boolean，不猜測數字代碼或「尚未決定」。未知值存 NULL 並記錄錯誤碼；缺少題目則存 NULL。學校、系級、活動名稱須為文字，經 NFKC、頭尾去空白與連續空白合併，最多 255 字元；缺漏存 NULL，無效型別或過長資料記錄錯誤碼。不自行合併學校簡稱，也不拆分系級。活動目前為單一文字，複選整格內容不會自動拆成多場活動。填表時間必須含時區，內部仍轉 UTC。舊 event_date 僅保留歷史資料，不再匯入或供 Agent 查詢，日期不會被轉成活動名稱；舊日期設定已不再使用。
+「是／否」、社員與參加的明確文字選項及布林值會轉成 boolean，不猜測數字代碼或「尚未決定」。未知值存 NULL 並記錄錯誤碼；缺少社員題目仍存 NULL，缺少參加意願題目或空白答案預設 true。學校、系級、活動名稱須為文字，經 NFKC、頭尾去空白與連續空白合併，最多 255 字元；缺漏存 NULL，無效型別或過長資料記錄錯誤碼。不自行合併學校簡稱，也不拆分系級。活動目前為單一文字，複選整格內容不會自動拆成多場活動。填表時間必須含時區，內部仍轉 UTC。舊 event_date 僅保留歷史資料，不再匯入或供 Agent 查詢，日期不會被轉成活動名稱；舊日期設定已不再使用。
 
 先 migration 再同步（在 backend 目錄）：
 
@@ -71,7 +117,7 @@ GOOGLE_FORMS_SUBMITTED_AT_COLUMN=時間戳記
 ..\.venv\Scripts\python.exe -m app.form_worker
 ```
 
-目前資料源仍是原本兩筆 test/temp；不會因新增欄位而捏造社員或參加答案。使用者提供的「工作坊3－物聯網專題」只作格式參考，沒有更換來源：題目是姓名、是否是社員；沒有參加題，日期在活動說明中且為兩場，不自動推成每筆回覆日期或參加意願。姓名仍只保存在 raw_payload.answers，沒有新增姓名欄或傳給 Agent。
+目前資料源仍是原本兩筆 test/temp；不會因新增欄位而捏造社員或參加答案。使用者提供的「工作坊3－物聯網專題」只作格式參考，沒有更換來源：題目是姓名、是否是社員；沒有參加題，依目前規則參加意願預設 true；日期在活動說明中且為兩場，不自動推成每筆回覆日期。姓名仍只保存在 raw_payload.answers，沒有新增姓名欄或傳給 Agent。
 
 Agent 現在改從 form_responses 讀取結構化統計，詳細說明如下。
 

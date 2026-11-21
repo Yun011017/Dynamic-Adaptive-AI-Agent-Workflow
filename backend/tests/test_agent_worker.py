@@ -18,7 +18,7 @@ class AgentWorkerTests(unittest.TestCase):
                               goal_id=3, attempts=1, output_payload=None, error_code=None, status='RUNNING')
         sequence = []
         def sync(**kwargs):
-            self.assertEqual(kwargs, {'workspace_id': 7})
+            self.assertEqual(kwargs, {'workspace_id': 7, 'goal_id': 3})
             sequence.append('sync')
             if sync_error:
                 raise sync_error

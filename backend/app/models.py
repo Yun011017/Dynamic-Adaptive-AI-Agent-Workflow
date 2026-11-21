@@ -162,10 +162,41 @@ class ExternalEvent(TenantRow, Base):
     )
 
 
+class FormSource(TenantRow, Base):
+    __tablename__ = "form_sources"
+    source_id: Mapped[str] = mapped_column(String(255))
+    name: Mapped[str] = mapped_column(String(255))
+    goal_id: Mapped[int] = mapped_column(BigInteger)
+    apps_script_url: Mapped[str] = mapped_column(String(2048))
+    timezone: Mapped[str] = mapped_column(String(64))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "source_id", name="uq_form_sources_identity"),
+        UniqueConstraint("workspace_id", "apps_script_url", name="uq_form_sources_endpoint"),
+        ForeignKeyConstraint(["workspace_id", "goal_id"], ["goals.workspace_id", "goals.id"], name="fk_form_source_goal"),
+    )
+
+
+class FormExecutionBinding(TenantRow, Base):
+    __tablename__ = "form_execution_bindings"
+    source_id: Mapped[str] = mapped_column(String(255))
+    copy_source: Mapped[str] = mapped_column(String(16))
+    execution_id: Mapped[int] = mapped_column(BigInteger)
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "source_id", "copy_source", name="uq_form_execution_binding_source"),
+        ForeignKeyConstraint(["workspace_id", "execution_id"], ["executions.workspace_id", "executions.id"], name="fk_form_binding_execution"),
+        CheckConstraint("copy_source IN ('人工','ai')", name="ck_form_binding_copy_source"),
+    )
+
+
 class FormResponse(TenantRow, Base):
     __tablename__ = "form_responses"
     external_event_id: Mapped[int] = mapped_column(BigInteger)
     source_id: Mapped[str] = mapped_column(String(255))
+    email: Mapped[str | None] = mapped_column(String(255))
+    respondent_name: Mapped[str | None] = mapped_column(String(255))
+    copy_source: Mapped[str | None] = mapped_column(String(16))
+    execution_id: Mapped[int | None] = mapped_column(BigInteger)
     is_member: Mapped[bool | None] = mapped_column(Boolean)
     will_attend: Mapped[bool | None] = mapped_column(Boolean)
     school: Mapped[str | None] = mapped_column(String(255))
@@ -176,6 +207,8 @@ class FormResponse(TenantRow, Base):
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     normalization_errors: Mapped[list] = mapped_column(JSON, server_default="[]")
     __table_args__ = (
+        ForeignKeyConstraint(["workspace_id", "execution_id"], ["executions.workspace_id", "executions.id"], name="fk_form_response_execution"),
+        Index("ix_form_responses_execution", "workspace_id", "execution_id"),
         ForeignKeyConstraint(["workspace_id", "external_event_id"], ["external_events.workspace_id", "external_events.id"]),
         UniqueConstraint("workspace_id", "external_event_id", name="uq_form_response_event"),
     )

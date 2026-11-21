@@ -20,8 +20,8 @@ def sample(values=(True, False)):
 class AgentRunnerTests(unittest.TestCase):
     def test_bounded_graph_uses_form_responses(self):
         with patch("app.agent_runner.get_form_summary", return_value=sample()) as reader:
-            result = run_agent(goal="Analyze forms", context="Test", constraints={}, workspace_id=7)
-        reader.assert_called_once_with(workspace_id=7)
+            result = run_agent(goal="Analyze forms", context="Test", constraints={}, workspace_id=7, goal_id=3)
+        reader.assert_called_once_with(workspace_id=7, goal_id=3)
         self.assertEqual(result["data_source"], "neon_form_summary")
         self.assertEqual(result["form_summary"]["storage_table"], "form_responses")
         self.assertIn("社員 1 筆", result["content_direction"])
@@ -85,7 +85,7 @@ class AgentRunnerTests(unittest.TestCase):
                 return AIMessage(content="2 筆回覆，其中 1 筆願意參加。")
         with patch("app.agent_runner.get_form_summary", return_value=sample()) as reader, patch("app.agent_runner._model_for", return_value=FakeModel()):
             result = run_agent(goal="test", context="", constraints={}, provider="gemini", workspace_id=7)
-        reader.assert_called_once_with(workspace_id=7)
+        reader.assert_called_once_with(workspace_id=7, goal_id=None)
         self.assertTrue(result["tool_called"])
         self.assertEqual(result["form_summary"]["attendance"]["yes"], 1)
 

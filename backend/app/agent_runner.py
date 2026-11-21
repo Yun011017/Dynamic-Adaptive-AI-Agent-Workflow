@@ -20,7 +20,7 @@ class RunState(TypedDict):
 
 
 def _read_summary(state: RunState) -> dict:
-    return {"form_summary": get_form_summary(workspace_id=state.get("workspace_id"))}
+    return {"form_summary": get_form_summary(workspace_id=state.get("workspace_id"), goal_id=state.get("goal_id"))}
 
 
 def _recommend(state: RunState) -> dict:
@@ -131,7 +131,7 @@ def _run_model(*, goal: str, context: str, constraints: dict, provider: str, mod
     from langgraph.graph import MessagesState
     from langgraph.prebuilt import ToolNode
 
-    summary = get_form_summary(workspace_id=workspace_id)
+    summary = get_form_summary(workspace_id=workspace_id, goal_id=goal_id)
 
     @tool
     def get_form_summary_tool() -> dict:

@@ -17,12 +17,18 @@ from app.config import settings
 
 ROOT = Path(__file__).resolve().parents[1]
 original = settings.migration_database_url or settings.database_url
+# Isolated schemas require startup search_path, which Neon's pooler rejects.
+original_url = make_url(original)
+if original_url.host and original_url.host.endswith('.neon.tech') and '-pooler.' in original_url.host:
+    original = original_url.set(host=original_url.host.replace('-pooler.', '.')).render_as_string(hide_password=False)
 SCHEMA = "platform_test_" + secrets.token_hex(8)
 test_url = make_url(original).update_query_dict({"options": "-csearch_path=" + SCHEMA}).render_as_string(hide_password=False)
 settings.database_url = test_url
 settings.migration_database_url = test_url
 settings.platform_api_key = "integration-test-key"
 settings.platform_workspace_slug = "development"
+settings.agent_provider = "local"
+settings.agent_model = "deterministic-langgraph"
 
 # Test discovery imports other modules first, so their app.db engine may already
 # point at the default database. Rebind it before importing app modules below;
@@ -149,7 +155,7 @@ class PlatformTests(unittest.TestCase):
     def test_09_repeated_migrate(self):
         command.upgrade(self.config,"head")
         with engine.connect() as c:
-            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0011")
+            self.assertEqual(c.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),"0014")
 
     def test_10_agent_run_is_saved_and_scoped(self):
         goal = self.client.post("/goals", headers=self.headers, json={"title": "Improve workshop registrations"}).json()
@@ -218,6 +224,243 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual(repeated.status_code, 200, repeated.text)
         self.assertEqual(repeated.json()["output_payload"]["strategy_id"], output["strategy_id"])
 
+
+    def test_official_registration_execution_attribution(self):
+        from datetime import datetime, timezone
+        from app.models import FormResponse
+        from app.form_sync import parse_responses, save_responses, FormSyncError
+        from tests.test_registration_import import registration_payload
+
+        with SessionLocal.begin() as db:
+            tenant = db.query(Workspace).filter_by(slug='development').one().id
+            goal = Goal(workspace_id=tenant, title='Synthetic club A/B registration')
+            db.add(goal)
+            db.flush()
+            strategy = Strategy(workspace_id=tenant, goal_id=goal.id, version=1, content='Synthetic test')
+            db.add(strategy)
+            db.flush()
+            human = Execution(workspace_id=tenant, strategy_id=strategy.id)
+            ai = Execution(workspace_id=tenant, strategy_id=strategy.id)
+            db.add_all([human, ai])
+            db.flush()
+            mapping = {'人工': human.id, 'ai': ai.id}
+            other = Workspace(slug='registration-other', name='Other registration tenant')
+            db.add(other)
+            db.flush()
+            other_id = other.id
+
+        rows = parse_responses(registration_payload())
+        with patch.object(settings, 'google_forms_execution_map', mapping):
+            with SessionLocal.begin() as db:
+                first = save_responses(db, rows, workspace_slug='development', source_id='club-formal')
+            with SessionLocal.begin() as db:
+                second = save_responses(db, rows[::-1], workspace_slug='development', source_id='club-formal')
+        self.assertEqual(first, dict(read=2, inserted=2, skipped=0))
+        self.assertEqual(second, dict(read=2, inserted=0, skipped=2))
+        with SessionLocal() as db:
+            saved = db.query(FormResponse).filter_by(source_id='club-formal').all()
+            self.assertEqual(len(saved), 2)
+            for response in saved:
+                self.assertEqual(response.execution_id, mapping[response.copy_source])
+                self.assertEqual(response.email, 'member@example.test')
+                self.assertEqual(response.respondent_name, '測試社員')
+                self.assertTrue(response.is_member)
+                self.assertTrue(response.will_attend)
+                self.assertEqual(response.submitted_at, datetime(2026, 11, 21, 2, 30, tzinfo=timezone.utc))
+                event = db.get(ExternalEvent, response.external_event_id)
+                self.assertEqual(event.raw_payload['answers']['文案來源'], response.copy_source)
+
+        # Removing configuration cannot erase established attribution.
+        with patch.object(settings, 'google_forms_execution_map', {}):
+            with SessionLocal.begin() as db:
+                save_responses(db, rows, workspace_slug='development', source_id='club-formal')
+                save_responses(db, rows, workspace_slug='development', source_id='club-backfill')
+        with SessionLocal() as db:
+            self.assertTrue(all(row.execution_id is None for row in
+                                db.query(FormResponse).filter_by(source_id='club-backfill')))
+        with patch.object(settings, 'google_forms_execution_map', mapping):
+            with SessionLocal.begin() as db:
+                backfilled = save_responses(db, rows, workspace_slug='development', source_id='club-backfill')
+            self.assertEqual(backfilled, dict(read=2, inserted=0, skipped=2))
+        with SessionLocal() as db:
+            backfilled_rows = db.query(FormResponse).filter_by(source_id='club-backfill').all()
+            self.assertEqual(len(backfilled_rows), 2)
+            for row in backfilled_rows:
+                self.assertEqual(row.execution_id, mapping[row.copy_source])
+        with patch.object(settings, 'google_forms_execution_map', {'人工': mapping['ai']}):
+            with self.assertRaises(FormSyncError), SessionLocal.begin() as db:
+                save_responses(db, rows, workspace_slug='development', source_id='club-formal')
+        with patch.object(settings, 'google_forms_execution_map', mapping):
+            with self.assertRaises(FormSyncError), SessionLocal.begin() as db:
+                save_responses(db, rows, workspace_slug='registration-other', source_id='club-cross')
+        # Database constraint also rejects a cross-tenant link without the importer.
+        with self.assertRaises(IntegrityError), SessionLocal.begin() as db:
+            event = ExternalEvent(workspace_id=other_id, provider='test', source_account='cross',
+                                  source_object_id='cross', source_version='v1', event_type='form_response', raw_payload={})
+            db.add(event)
+            db.flush()
+            db.add(FormResponse(workspace_id=other_id, external_event_id=event.id,
+                                source_id='cross', execution_id=mapping['ai']))
+            db.flush()
+        with SessionLocal() as db:
+            self.assertEqual(db.query(FormResponse).filter_by(source_id='club-cross').count(), 0)
+            for response in db.query(FormResponse).filter_by(source_id='club-formal'):
+                self.assertEqual(response.execution_id, mapping[response.copy_source])
+
+    def test_form_binding_api_backfills_and_controls_future_imports(self):
+        from app.models import FormResponse, FormExecutionBinding
+        from app.form_sync import parse_responses, save_responses
+        from tests.test_registration_import import registration_payload
+        with SessionLocal.begin() as db:
+            tenant = db.query(Workspace).filter_by(slug='development').one().id
+            goal = Goal(workspace_id=tenant, title='UI form binding test')
+            db.add(goal)
+            db.flush()
+            strategy = Strategy(workspace_id=tenant, goal_id=goal.id, version=1, content='UI attribution')
+            db.add(strategy)
+            db.flush()
+            first = Execution(workspace_id=tenant, strategy_id=strategy.id)
+            second = Execution(workspace_id=tenant, strategy_id=strategy.id)
+            db.add_all([first, second])
+            db.flush()
+            execution_id, other_id, strategy_id = first.id, second.id, strategy.id
+        payload = registration_payload()
+        with patch.object(settings, 'google_forms_execution_map', {}):
+            with SessionLocal.begin() as db:
+                save_responses(db, parse_responses(payload), workspace_slug='development', source_id='ui-form-source')
+        self.assertEqual(self.client.get('/form-sources').status_code, 401)
+        listed = self.client.get('/form-sources', headers=self.headers)
+        self.assertEqual(listed.status_code, 200)
+        self.assertNotIn('member@example.test', listed.text)
+        self.assertNotIn('測試社員', listed.text)
+        executions = self.client.get(f'/strategies/{strategy_id}/executions', headers=self.headers).json()
+        self.assertEqual({row['id'] for row in executions}, {execution_id, other_id})
+        binding = dict(source_id='ui-form-source', copy_source='人工')
+        path = f'/executions/{execution_id}/form-bindings'
+        result = self.client.post(path, headers=self.headers, json=binding)
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()['backfilled'], 1)
+        repeated = self.client.post(path, headers=self.headers, json=binding)
+        self.assertEqual(repeated.json()['backfilled'], 0)
+        conflict = self.client.post(f'/executions/{other_id}/form-bindings', headers=self.headers, json=binding)
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(self.client.post(path, headers=self.headers, json={**binding, 'source_id': 'missing'}).status_code, 404)
+        self.assertEqual(self.client.post(path, headers=self.headers, json={**binding, 'copy_source': 'unknown'}).status_code, 422)
+        self.assertEqual(self.client.post(path, headers=self.headers, json={**binding, 'source_id': '  '}).status_code, 422)
+        self.assertEqual(self.client.post('/executions/999999999/form-bindings', headers=self.headers, json=binding).status_code, 404)
+        # Later responses use DB binding even if the old env mapping differs.
+        payload['data']['人工'].append({**payload['data']['人工'][0], '時間戳記': '2026-11-21T11:30:00+08:00'})
+        with patch.object(settings, 'google_forms_execution_map', {'人工': other_id}):
+            with SessionLocal.begin() as db:
+                saved = save_responses(db, parse_responses(payload), workspace_slug='development', source_id='ui-form-source')
+        self.assertEqual(saved, dict(read=3, inserted=1, skipped=2))
+        with SessionLocal() as db:
+            rows = db.query(FormResponse).filter_by(source_id='ui-form-source').all()
+            self.assertEqual(len(rows), 3)
+            for row in rows:
+                self.assertEqual(row.execution_id, execution_id if row.copy_source == '人工' else None)
+            self.assertEqual(db.query(FormExecutionBinding).filter_by(source_id='ui-form-source').count(), 1)
+        with SessionLocal.begin() as db:
+            other = Workspace(slug='ui-binding-other', name='Isolated UI tenant')
+            db.add(other)
+        with patch.object(settings, 'platform_workspace_slug', 'ui-binding-other'):
+            self.assertEqual(self.client.post(path, headers=self.headers, json=binding).status_code, 404)
+            self.assertNotIn('ui-form-source', self.client.get('/form-sources', headers=self.headers).text)
+
+    def test_z_registered_form_sources_are_activity_scoped(self):
+        from app.models import FormResponse, FormSource
+        from app.form_summary import get_form_summary
+        from app.form_sync import FormSyncError, sync_once
+        from tests.test_registration_import import registration_payload
+        with SessionLocal.begin() as db:
+            tenant = db.query(Workspace).filter_by(slug='development').one().id
+            goals = [Goal(workspace_id=tenant, title='Source activity A'), Goal(workspace_id=tenant, title='Source activity B')]
+            db.add_all(goals)
+            db.flush()
+            goal_a, goal_b = [goal.id for goal in goals]
+            strategies = [Strategy(workspace_id=tenant, goal_id=goal.id, version=1, content='source registry') for goal in goals]
+            db.add_all(strategies)
+            db.flush()
+            executions = [Execution(workspace_id=tenant, strategy_id=strategy.id) for strategy in strategies]
+            db.add_all(executions)
+            db.flush()
+            execution_a, execution_b = [execution.id for execution in executions]
+            other = Workspace(slug='source-registry-other', name='Other source workspace')
+            db.add(other)
+        endpoint_a = 'https://script.google.com/macros/s/source-a/exec?token=private-token'
+        endpoint_b = 'https://script.google.com/macros/s/source-b/exec'
+        def create(name, goal, url):
+            return self.client.post('/form-source-configs', headers=self.headers,
+                                    json=dict(name=name, goal_id=goal, apps_script_url=url, timezone='Asia/Taipei'))
+        self.assertEqual(self.client.get('/form-source-configs').status_code, 401)
+        self.assertEqual(create('bad', goal_a, 'https://forms.gle/test').status_code, 422)
+        self.assertEqual(create('missing', 999999999, endpoint_a).status_code, 404)
+        created_a = create('Activity A forms', goal_a, endpoint_a)
+        self.assertEqual(created_a.status_code, 201, created_a.text)
+        created_b = create('Activity B forms', goal_b, endpoint_b)
+        self.assertEqual(created_b.status_code, 201, created_b.text)
+        a, b = created_a.json(), created_b.json()
+        self.assertNotIn('private-token', created_a.text)
+        self.assertNotEqual(a['source_id'], b['source_id'])
+        self.assertEqual(create('duplicate', goal_b, endpoint_a).status_code, 409)
+        listed = self.client.get('/form-sources', headers=self.headers).json()
+        self.assertEqual(len([row for row in listed if row.get('source_id') == a['source_id']]), 2)
+        # Sources can be bound before any response exists, but only within their activity.
+        binding = dict(source_id=a['source_id'], copy_source='人工')
+        self.assertEqual(self.client.post(f'/executions/{execution_b}/form-bindings', headers=self.headers, json=binding).status_code, 409)
+        self.assertEqual(self.client.post(f'/executions/{execution_a}/form-bindings', headers=self.headers, json=binding).status_code, 200)
+        payload = registration_payload()
+        for rows in payload['data'].values():
+            rows[0]['時間戳記'] = '2026/11/21 上午 10:30:00'
+        path_a, path_b = f"/form-source-configs/{a['id']}", f"/form-source-configs/{b['id']}"
+        with patch('app.form_sync.fetch_table', return_value=payload) as fetch:
+            result = self.client.post(path_a + '/sync', headers=self.headers)
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertEqual(result.json(), dict(read=2, inserted=2, skipped=0))
+            fetch.assert_called_once_with(endpoint_a)
+            self.assertEqual(self.client.post(path_a + '/sync', headers=self.headers).json()['inserted'], 0)
+            self.assertEqual(self.client.post(path_b + '/sync', headers=self.headers).json()['inserted'], 2)
+        with SessionLocal() as db:
+            saved = db.query(FormResponse).filter_by(source_id=a['source_id']).all()
+            self.assertEqual(len(saved), 2)
+            for row in saved:
+                self.assertEqual(row.submitted_at.hour, 2)
+                self.assertEqual(row.execution_id, execution_a if row.copy_source == '人工' else None)
+        self.assertEqual(get_form_summary(workspace_id=tenant, goal_id=goal_a)['response_count'], 2)
+        self.assertEqual(get_form_summary(workspace_id=tenant, goal_id=goal_b)['response_count'], 2)
+        self.assertEqual(get_form_summary(workspace_id=tenant, goal_id=999999999)['response_count'], 0)
+        from app.agent_worker import load_strategy_context
+        with SessionLocal() as db:
+            _, refs = load_strategy_context(db, workspace_id=tenant, goal_id=goal_a)
+            self.assertEqual(len(refs['form_response_ids']), 2)
+        # Legacy imports that already point at another activity cannot be adopted.
+        with patch.object(settings, 'google_forms_apps_script_url', 'https://script.google.com/macros/s/legacy-linked/exec'), \
+             patch.object(settings, 'google_forms_source_id', a['source_id']):
+            self.assertEqual(create('Wrong activity', goal_b, settings.google_forms_apps_script_url).status_code, 409)
+        # Google failures are sanitized and leave previously saved responses intact.
+        with patch('app.form_sync.fetch_table', side_effect=FormSyncError('Cannot read Apps Script')):
+            self.assertEqual(self.client.post(path_a + '/sync', headers=self.headers).status_code, 502)
+        self.assertEqual(get_form_summary(workspace_id=tenant, goal_id=goal_a)['response_count'], 2)
+        self.assertEqual(self.client.patch(path_b, headers=self.headers, json={'enabled': False}).status_code, 200)
+        self.assertEqual(self.client.post(path_b + '/sync', headers=self.headers).status_code, 409)
+        with patch('app.form_sources.sync_registered_source', return_value=dict(read=2, inserted=0, skipped=2)) as sync:
+            self.assertEqual(sync_once(workspace_id=tenant, goal_id=goal_a)['read'], 2)
+            sync.assert_called_once_with(a['id'], tenant)
+            sync.reset_mock()
+            self.assertEqual(sync_once(workspace_id=tenant, goal_id=goal_b)['read'], 0)
+            sync.assert_not_called()
+        self.assertEqual(self.client.patch(path_b, headers=self.headers, json={'enabled': True}).status_code, 200)
+        # Adopting the original .env URL retains its identity instead of importing duplicates.
+        with patch.object(settings, 'google_forms_apps_script_url', 'https://script.google.com/macros/s/adopt/exec'), \
+             patch.object(settings, 'google_forms_source_id', 'adopt-existing'):
+            adopted = create('Adopt legacy', goal_a, settings.google_forms_apps_script_url)
+            self.assertEqual(adopted.status_code, 201, adopted.text)
+            self.assertEqual(adopted.json()['source_id'], 'adopt-existing')
+        with patch.object(settings, 'platform_workspace_slug', 'source-registry-other'):
+            self.assertEqual(self.client.get('/form-source-configs', headers=self.headers).json(), [])
+            self.assertEqual(self.client.post(path_a + '/sync', headers=self.headers).status_code, 404)
+            self.assertEqual(self.client.patch(path_a, headers=self.headers, json={'enabled': False}).status_code, 404)
+            self.assertEqual(create('foreign activity', goal_a, endpoint_a).status_code, 404)
 
     def test_11_form_ingestion_is_idempotent(self):
         from app.form_sync import parse_responses, save_responses, PROVIDER

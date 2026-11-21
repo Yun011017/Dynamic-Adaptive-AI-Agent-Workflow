@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import FormBindingPanel from "./form-binding-panel";
 
 const labels = {
   PENDING: "等待 worker",
@@ -1592,6 +1593,8 @@ export default function Dashboard() {
         </div>
         {selectedStrategy ? (
           <>
+            <FormBindingPanel key={selectedStrategy} strategyId={selectedStrategy} goalId={selectedStrategyRecord?.goal_id || 0} apiBase={normal()} apiKey={key}
+              executionLabels={Object.fromEntries(drafts.map((draft) => [draft.execution_id, draft.payload.title || `內容提案 #${draft.id}`]))} />
             <div className="mt-6 grid gap-6 lg:grid-cols-[1.05fr_.95fr]">
               <form
                 id="draft-form"
