@@ -40,6 +40,16 @@ def _recommend(state: RunState) -> dict:
            if attendance["yes"] else "尚無明確願意參加的回覆，先補齊意願資料，再決定後續宣傳。")
         if count else "form_responses 尚無此來源的回覆，請先執行表單同步。"
     )
+    # Evaluation follow-ups carry a structured snapshot in context. Local mode
+    # incorporates its advice explicitly rather than merely echoing context.
+    try:
+        followup = json.loads(state.get("context") or "{}")
+        evaluation = followup.get("evaluation", {}) if isinstance(followup, dict) else {}
+        advice = evaluation.get("recommendations", []) if isinstance(evaluation, dict) else []
+        if isinstance(advice, list):
+            direction += " 上一輪評估建議：" + "；".join(x for x in advice if isinstance(x, str))
+    except (ValueError, TypeError):
+        pass
     signup_url = state["constraints"].get("signup_url") if isinstance(state["constraints"], dict) else None
     if signup_url:
         direction += f" 已提供報名入口：{signup_url}；後續宣傳請以此網址作為唯一報名 CTA。"

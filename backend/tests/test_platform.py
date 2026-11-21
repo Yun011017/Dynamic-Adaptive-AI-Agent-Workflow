@@ -76,6 +76,74 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual(self.client.get("/goals", headers={"Authorization":"Bearer wrong"}).status_code, 401)
         self.assertEqual(self.client.get("/goals", headers=self.headers).status_code, 200)
 
+    def test_evaluation_followup_retry_and_refresh(self):
+        from datetime import datetime, timezone
+        from app import agent_worker
+        with SessionLocal() as session:
+            tenant = session.query(Workspace).filter_by(slug="development").one().id
+            goal = Goal(workspace_id=tenant, title="Followup", kpi_definition={"reach": 100}, constraints={})
+            session.add(goal); session.flush()
+            strategy = Strategy(workspace_id=tenant, goal_id=goal.id, version=1, content="原策略")
+            session.add(strategy); session.flush()
+            execution = Execution(workspace_id=tenant, strategy_id=strategy.id, status="SUCCEEDED")
+            session.add(execution); session.flush()
+            event = ExternalEvent(workspace_id=tenant, provider="test", source_account="followup", source_object_id="1", source_version="1", event_type="synthetic", raw_payload={})
+            session.add(event); session.flush()
+            session.add(Observation(workspace_id=tenant, external_event_id=event.id, strategy_id=strategy.id, execution_id=execution.id, metric="reach", value=50, observed_at=datetime.now(timezone.utc)))
+            execution_id, goal_id = execution.id, goal.id
+            session.commit()
+        url = f"/executions/{execution_id}/evaluation"
+        first = self.client.post(url, headers=self.headers).json()
+        run_id = first["next_strategy_run_id"]
+        self.assertEqual(self.client.post(url, headers=self.headers).json()["next_strategy_run_id"], run_id)
+        self.assertEqual(self.client.post(url + "?refresh=true", headers=self.headers).status_code, 409)
+        with patch.object(agent_worker, "refresh_form_data", return_value={"status": "succeeded"}), patch.object(agent_worker, "run_agent", side_effect=RuntimeError("failed")):
+            process_one_run(run_id)
+        self.assertEqual(self.client.post(f"/agent/runs/{run_id}/retry", headers=self.headers).status_code, 202)
+        with patch.object(agent_worker, "refresh_form_data", return_value={"status": "succeeded"}), patch.object(agent_worker, "run_agent", return_value={"reason": "ok", "content_direction": "測試建議", "form_summary": {"response_count": 0}}) as agent:
+            process_one_run(run_id)
+        self.assertIn("下一輪先測試", agent.call_args.kwargs["context"])
+        with SessionLocal() as session:
+            created = session.query(Strategy).filter_by(goal_id=goal_id, version=2).one()
+            self.assertIn('source_execution_id', created.content)
+        refreshed = self.client.post(url + "?refresh=true", headers=self.headers)
+        self.assertNotEqual(refreshed.json()["next_strategy_run_id"], run_id)
+
+    @unittest.skipUnless(os.environ.get("RUN_REAL_GEMINI") == "1", "requires explicit real Gemini validation")
+    def test_real_gemini_evaluation_followup(self):
+        import json
+        from datetime import datetime, timezone
+        from app import agent_worker
+        with SessionLocal() as session:
+            tenant = session.query(Workspace).filter_by(slug="development").one().id
+            goal = Goal(workspace_id=tenant, title="測試活動宣傳", kpi_definition={"reach": 100}, constraints={})
+            session.add(goal); session.flush()
+            strategy = Strategy(workspace_id=tenant, goal_id=goal.id, version=1, content="以 Instagram 宣傳活動")
+            session.add(strategy); session.flush()
+            execution = Execution(workspace_id=tenant, strategy_id=strategy.id, status="SUCCEEDED")
+            session.add(execution); session.flush()
+            event = ExternalEvent(workspace_id=tenant, provider="test", source_account="gemini", source_object_id="1", source_version="1", event_type="synthetic", raw_payload={})
+            session.add(event); session.flush()
+            session.add(Observation(workspace_id=tenant, external_event_id=event.id, strategy_id=strategy.id, execution_id=execution.id, metric="reach", value=50, observed_at=datetime.now(timezone.utc)))
+            execution_id, goal_id = execution.id, goal.id
+            session.commit()
+        with patch.object(settings, "agent_provider", "gemini"), patch.object(settings, "agent_model", "gemini-3.5-flash-lite"), patch.object(agent_worker, "refresh_form_data", return_value={"status": "succeeded"}):
+            response = self.client.post(f"/executions/{execution_id}/evaluation", headers=self.headers)
+            self.assertEqual(response.status_code, 200, response.text)
+            result = response.json()
+            self.assertEqual(result["recommendation_source"], "llm")
+            run_id = result["next_strategy_run_id"]
+            process_one_run(run_id)
+            run = self.client.get(f"/agent/runs/{run_id}", headers=self.headers).json()
+            self.assertEqual(run["status"], "COMPLETED", run.get("error_message"))
+            self.assertTrue(run["output_payload"]["tool_called"])
+            self.assertIn(result["recommendations"][0], run["input_payload"]["context"])
+            with SessionLocal() as session:
+                created = session.query(Strategy).filter_by(goal_id=goal_id, version=2).one()
+                content = json.loads(created.content)
+                self.assertTrue(content["content_direction"])
+                self.assertEqual(content["source_execution_id"], execution_id)
+
     def test_02_api_chain_and_duplicate_version(self):
         g = self.client.post("/goals", headers=self.headers, json={"title":"Integration goal"})
         self.assertEqual(g.status_code, 201, g.text)
