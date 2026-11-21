@@ -315,6 +315,27 @@ def list_scheduled_drafts(db: DB, tenant: Tenant, limit: int = 100):
     )
 
 
+@app.get("/content-drafts/publication-history", response_model=list[ContentDraftRead])
+def list_publication_history(db: DB, tenant: Tenant, limit: int = 100):
+    """Return workspace-wide publishing outcomes, independent of the selected Strategy."""
+    if not 1 <= limit <= 100:
+        raise HTTPException(422, "Invalid limit")
+    return read_with_retry(
+        lambda: db.scalars(
+            select(ExecutionAction)
+            .where(
+                ExecutionAction.workspace_id == tenant,
+                ExecutionAction.tool == "meta_api",
+                ExecutionAction.operation == "instagram_publish",
+                ExecutionAction.status.in_(["EXECUTING", "SUCCEEDED", "FAILED"]),
+            )
+            .order_by(ExecutionAction.created_at.desc(), ExecutionAction.id.desc())
+            .limit(limit)
+        ).all(),
+        reset=db.rollback,
+    )
+
+
 @app.post("/strategies/{strategy_id}/content-draft-runs", response_model=AgentRunRead, status_code=202)
 def queue_content_draft(strategy_id: int, data: ContentDraftGenerateRequest, db: DB, tenant: Tenant):
     """Queue model work; the background worker creates the persisted content draft."""

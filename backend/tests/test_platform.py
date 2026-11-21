@@ -390,6 +390,56 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual(listed.status_code, 200, listed.text)
         self.assertEqual([item["id"] for item in listed.json()], [draft.json()["id"]])
 
+    def test_16b_publication_history_is_workspace_wide(self):
+        first_goal = self.client.post(
+            "/goals", headers=self.headers, json={"title": "Published one"}
+        ).json()
+        second_goal = self.client.post(
+            "/goals", headers=self.headers, json={"title": "Published two"}
+        ).json()
+        first_strategy = self.client.post(
+            f"/goals/{first_goal['id']}/strategies",
+            headers=self.headers,
+            json={"version": 1, "content": "First strategy"},
+        ).json()
+        second_strategy = self.client.post(
+            f"/goals/{second_goal['id']}/strategies",
+            headers=self.headers,
+            json={"version": 1, "content": "Second strategy"},
+        ).json()
+
+        def create_draft(strategy_id, caption):
+            response = self.client.post(
+                f"/strategies/{strategy_id}/content-drafts",
+                headers=self.headers,
+                json={
+                    "channel": "instagram",
+                    "caption": caption,
+                    "image_requirements": ["cover"],
+                    "image_urls": ["https://images.example.test/cover.jpg"],
+                },
+            )
+            self.assertEqual(response.status_code, 201, response.text)
+            return response.json()
+
+        first_draft = create_draft(first_strategy["id"], "Published draft")
+        second_draft = create_draft(second_strategy["id"], "Failed draft")
+        with SessionLocal() as db:
+            first_action = db.get(ExecutionAction, first_draft["id"])
+            second_action = db.get(ExecutionAction, second_draft["id"])
+            first_action.status = "SUCCEEDED"
+            second_action.status = "FAILED"
+            db.commit()
+
+        history = self.client.get(
+            "/content-drafts/publication-history", headers=self.headers
+        )
+        self.assertEqual(history.status_code, 200, history.text)
+        self.assertEqual(
+            {item["id"] for item in history.json()},
+            {first_draft["id"], second_draft["id"]},
+        )
+
     def test_17_strategy_regeneration_versions_and_draft_links(self):
         goal = self.client.post(
             "/goals", headers=self.headers, json={"title": "Versioned strategy goal"}
