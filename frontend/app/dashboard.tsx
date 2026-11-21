@@ -110,7 +110,7 @@ type ApprovalItem = {
 function Pill({ status }) {
   return (
     <span
-      className={`rounded-full px-2.5 py-1 font-mono text-[11px] font-semibold ${colors[status] || "bg-stone-100"}`}
+      className={`inline-flex shrink-0 whitespace-nowrap rounded-full px-2.5 py-1 font-mono text-[11px] font-semibold ${colors[status] || "bg-stone-100"}`}
     >
       {labels[status] || status}
     </span>
@@ -2180,7 +2180,7 @@ export default function Dashboard() {
         </div>
         {publicationHistory.length ? (
           <ul
-            className="mt-4 grid h-[30rem] grid-auto-rows-[9.5rem] list-none gap-3 overflow-y-auto pr-2 [scrollbar-gutter:stable] md:grid-cols-2"
+            className="mt-4 grid h-[31.5rem] grid-auto-rows-[10rem] list-none gap-3 overflow-y-auto pr-2 [scrollbar-gutter:stable] md:grid-cols-2"
             aria-label="所有發布紀錄"
           >
             {publicationHistory.map((draft) => {
@@ -2204,7 +2204,7 @@ export default function Dashboard() {
                       {draft.payload.caption || "尚無貼文內容"}
                     </p>
                   </button>
-                  <div className="mt-auto border-t border-stone-200 pt-2 text-xs">
+                  <div className="mt-2 border-t border-stone-200 pt-2 text-xs">
                     {draft.status === "SUCCEEDED" && (
                       <>
                         <p className="m-0 text-maker-muted">
