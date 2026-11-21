@@ -548,6 +548,7 @@ from app.models import ApprovalRequest
 from app.schemas import ApprovalDecisionRequest, ApprovalRequestRead, PublishActionRequest
 from app.services.approval_service import ApprovalService
 from app.services.publisher_service import InstagramPublisherService
+from app.services.publishing_audit import record_publish_failure, record_publish_success
 
 @app.post("/actions/{action_id}/approval-requests", response_model=ApprovalRequestRead, status_code=201)
 def submit_action_for_review(action_id: int, db: DB, tenant: Tenant):
@@ -647,5 +648,12 @@ async def execute_action(action_id: int, db: DB, tenant: Tenant, data: PublishAc
     )
     
     # 執行前置檢查與受控發布
-    external_id = await InstagramPublisherService.publish_action(db, action, approval)
+    try:
+        external_id = await InstagramPublisherService.publish_action(db, action, approval)
+    except Exception as exc:
+        record_publish_failure(action, exc)
+        db.commit()
+        raise
+    record_publish_success(action, external_id)
+    db.commit()
     return {"message": "發布成功", "action_id": action.id, "external_id": external_id, "status": "SUCCEEDED"}

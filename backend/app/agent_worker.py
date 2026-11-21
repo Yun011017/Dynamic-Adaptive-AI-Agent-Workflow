@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from app.models import ExecutionAction, ApprovalRequest
 from app.services.publisher_service import InstagramPublisherService
+from app.services.publishing_audit import record_publish_failure, record_publish_success
 
 def process_scheduled_publishing(db: Session) -> str | None:
     """檢查已核准且到達發布時間的 Action，由 worker 執行發布"""
@@ -68,9 +69,12 @@ def process_scheduled_publishing(db: Session) -> str | None:
             external_id = asyncio.run(
                 InstagramPublisherService.publish_action(db, action, approval)
             )
+            record_publish_success(action, external_id)
+            db.commit()
             return f"Action {action.id} published successfully as {external_id}"
         except Exception as exc:
             action.status = "FAILED"
+            record_publish_failure(action, exc)
             db.commit()
             print(f"Action {action.id} publishing failed: {exc}")
             return f"Action {action.id} failed"
