@@ -3,7 +3,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.content_generator import generate_content_draft
+from app.content_generator import generate_content_draft, revise_content_draft_with_agent
+from app.schemas import ContentDraftCreate
 
 
 def goal(signup_url="https://example.test/register"):
@@ -70,4 +71,33 @@ class ContentGeneratorTests(unittest.TestCase):
         self.assertTrue(result.carousel)
         self.assertEqual(result.image_urls, [])
         self.assertEqual(result.hashtags, ["NTUMaker", "創客"])
+
+    def test_agent_revision_returns_a_complete_safe_suggestion(self):
+        class FakeModel:
+            def invoke(self, _messages):
+                return SimpleNamespace(content=json.dumps({
+                    "reply": "已將開頭改得更聚焦新手的第一步。",
+                    "suggestion": {
+                        "title": "新手 Arduino 工作坊",
+                        "caption": "從點亮第一顆 LED 開始。",
+                        "hashtags": ["#NTUMaker", "Arduino"],
+                        "image_requirements": ["4:5 直式封面，呈現麵包板與 LED。", "4:5 直式實作照，呈現接線過程。"],
+                        "video_requirements": [],
+                    },
+                }, ensure_ascii=False))
+
+        current = ContentDraftCreate(
+            title="原始提案",
+            caption="原本的文案。",
+            hashtags=["NTUMaker"],
+            image_requirements=["4:5 直式封面。", "4:5 直式作品照。"],
+            carousel=True,
+        )
+        with patch("app.content_generator._model_for", return_value=FakeModel()):
+            result = revise_content_draft_with_agent(
+                goal=goal(), strategy=strategy(), current_draft=current,
+                message="請讓新手更容易理解", provider="gemini", model_name="test-model",
+            )
+        self.assertEqual(result.suggestion.title, "新手 Arduino 工作坊")
+        self.assertEqual(result.suggestion.hashtags, ["NTUMaker", "Arduino"])
 

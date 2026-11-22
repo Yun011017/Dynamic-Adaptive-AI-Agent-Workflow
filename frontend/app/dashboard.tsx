@@ -96,6 +96,19 @@ type ContentDraft = {
     };
   };
 };
+type DraftAssistantSuggestion = {
+  title: string;
+  caption: string;
+  hashtags: string[];
+  image_requirements: string[];
+  video_requirements: string[];
+};
+type DraftAssistantMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  suggestion?: DraftAssistantSuggestion;
+};
 type ApprovalItem = {
   id: number;
   action_id: number;
@@ -122,6 +135,41 @@ function formatTaipeiTime(value?: string | null) {
   return new Date(value).toLocaleString("zh-TW", {
     timeZone: "Asia/Taipei",
   });
+}
+
+function InlineTextDiff({ before, after }: { before: string; after: string }) {
+  const oldText = Array.from(before);
+  const newText = Array.from(after);
+  let prefixLength = 0;
+  while (
+    prefixLength < oldText.length &&
+    prefixLength < newText.length &&
+    oldText[prefixLength] === newText[prefixLength]
+  ) {
+    prefixLength += 1;
+  }
+  let oldSuffix = oldText.length;
+  let newSuffix = newText.length;
+  while (
+    oldSuffix > prefixLength &&
+    newSuffix > prefixLength &&
+    oldText[oldSuffix - 1] === newText[newSuffix - 1]
+  ) {
+    oldSuffix -= 1;
+    newSuffix -= 1;
+  }
+  const unchangedStart = oldText.slice(0, prefixLength).join("");
+  const removed = oldText.slice(prefixLength, oldSuffix).join("");
+  const added = newText.slice(prefixLength, newSuffix).join("");
+  const unchangedEnd = oldText.slice(oldSuffix).join("");
+  return (
+    <p className="mb-0 mt-2 break-all whitespace-pre-wrap text-maker-ink">
+      {unchangedStart}
+      {removed && <del className="bg-red-100 text-red-800 decoration-red-600">{removed}</del>}
+      {added && <ins className="bg-emerald-100 text-emerald-800 no-underline">{added}</ins>}
+      {unchangedEnd}
+    </p>
+  );
 }
 
 function Field({ label, children }) {
@@ -360,6 +408,11 @@ export default function Dashboard() {
   const [selectedStrategy, setSelectedStrategy] = useState<number | null>(null);
   const [draftForm, setDraftForm] = useState(blankDraft);
   const [editingDraft, setEditingDraft] = useState<ContentDraft | null>(null);
+  const [assistantMessages, setAssistantMessages] = useState<DraftAssistantMessage[]>([]);
+  const [assistantInput, setAssistantInput] = useState("");
+  const [assistantSending, setAssistantSending] = useState(false);
+  const [assistantError, setAssistantError] = useState("");
+  const [assistantUndoForms, setAssistantUndoForms] = useState<typeof blankDraft[]>([]);
   const [draftSaving, setDraftSaving] = useState(false);
   const [scheduleUpdatingId, setScheduleUpdatingId] = useState<number | null>(null);
   const [mediaUploading, setMediaUploading] = useState<"image" | "video" | null>(null);
@@ -392,7 +445,21 @@ export default function Dashboard() {
   const [connection, setConnection] = useState(false);
   const resultRef = useRef(null);
   const finished = useRef(new Set());
+  const assistantConversationRef = useRef<HTMLDivElement | null>(null);
+  const suggestionChangesRef = useRef<HTMLDivElement | null>(null);
   const normal = () => base.trim().replace(/\/$/, "");
+  useEffect(() => {
+    const panel = assistantConversationRef.current;
+    if (panel) {
+      panel.scrollTo({ top: panel.scrollHeight, behavior: "smooth" });
+    }
+  }, [assistantMessages]);
+  useEffect(() => {
+    const panel = suggestionChangesRef.current;
+    if (panel) {
+      panel.scrollTo({ top: panel.scrollHeight, behavior: "smooth" });
+    }
+  }, [assistantMessages]);
   const call = async (path, options = {}) => {
     if (!key) throw new Error("請先設定 Development API key。");
     const response = await fetch(`${normal()}${path}`, {
@@ -1003,6 +1070,80 @@ export default function Dashboard() {
       );
     }
   }
+  async function askDraftAssistant() {
+    if (!editingDraft) {
+      setAssistantError("請先從上方內容提案選擇一則貼文。");
+      return;
+    }
+    const message = assistantInput.trim();
+    if (!message) {
+      setAssistantError("請輸入希望 Agent 如何修改貼文。");
+      return;
+    }
+    if (editingDraft.status === "SUCCEEDED" || editingDraft.status === "EXECUTING") {
+      setAssistantError("此貼文已發布或正在發布，只能查看，不能再建立修改建議。");
+      return;
+    }
+    const userMessage: DraftAssistantMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      text: message,
+    };
+    setAssistantMessages((messages) => [...messages, userMessage]);
+    setAssistantInput("");
+    setAssistantSending(true);
+    setAssistantError("");
+    try {
+      const result = (await call(`/content-drafts/${editingDraft.id}/assistant`, {
+        method: "POST",
+        body: JSON.stringify({
+          message,
+          current_content: {
+            title: draftForm.title,
+            caption: draftForm.caption,
+            hashtags: draftForm.hashtags.split(/[\s,，]+/).filter(Boolean),
+            image_requirements: draftForm.imageRequirement.split("\n").filter((value) => value.trim()),
+            video_requirements: draftForm.videoRequirement.split("\n").filter((value) => value.trim()),
+          },
+        }),
+      })) as { reply: string; suggestion: DraftAssistantSuggestion };
+      setAssistantMessages((messages) => [
+        ...messages,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          text: result.reply,
+          suggestion: result.suggestion,
+        },
+      ]);
+    } catch (cause) {
+      setAssistantError(cause instanceof Error ? cause.message : "Agent 暫時無法編修貼文。");
+    } finally {
+      setAssistantSending(false);
+    }
+  }
+  function applyAssistantSuggestion(suggestion: DraftAssistantSuggestion) {
+    setAssistantUndoForms((history) => [...history, draftForm]);
+    setDraftForm((form) => ({
+      ...form,
+      title: suggestion.title,
+      caption: suggestion.caption,
+      hashtags: suggestion.hashtags.join(", "),
+      imageRequirement: suggestion.image_requirements.join("\n"),
+      videoRequirement: suggestion.video_requirements.join("\n"),
+    }));
+    setFeedback("Agent 建議已帶回內容提案，你可以繼續手動修改；確認預覽後，按「建立新版本」才會儲存。");
+    document
+      .getElementById("draft-form")
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  function undoLastAssistantSuggestion() {
+    const previous = assistantUndoForms.at(-1);
+    if (!previous) return;
+    setDraftForm(previous);
+    setAssistantUndoForms((history) => history.slice(0, -1));
+    setFeedback("已還原套用前的內容提案；你可以繼續修改或再請 Agent 提出建議。");
+  }
   function beginRevision(draft: ContentDraft) {
     // A publishing plan belongs to the proposal across revisions. Older rows
     // may predate that plan, so show the newest saved time rather than making
@@ -1025,6 +1166,10 @@ export default function Dashboard() {
           .slice(0, 16)
       : "";
     setEditingDraft(draft);
+    setAssistantMessages([]);
+    setAssistantInput("");
+    setAssistantError("");
+    setAssistantUndoForms([]);
     setDraftForm({
       title: draft.payload.title || "",
       caption: draft.payload.caption || "",
@@ -1112,6 +1257,38 @@ export default function Dashboard() {
   );
   const publicationHistory = publicationDrafts;
   const isViewingPublishedDraft = editingDraft?.status === "SUCCEEDED";
+  const latestAssistantSuggestion = [...assistantMessages]
+    .reverse()
+    .find((message) => message.suggestion)?.suggestion;
+  const suggestionChanges = latestAssistantSuggestion
+    ? [
+        {
+          label: "提案名稱",
+          before: draftForm.title,
+          after: latestAssistantSuggestion.title,
+        },
+        {
+          label: "Instagram 文案",
+          before: draftForm.caption,
+          after: latestAssistantSuggestion.caption,
+        },
+        {
+          label: "Hashtags",
+          before: draftForm.hashtags,
+          after: latestAssistantSuggestion.hashtags.join(", "),
+        },
+        {
+          label: "圖片素材方向",
+          before: draftForm.imageRequirement,
+          after: latestAssistantSuggestion.image_requirements.join("\n"),
+        },
+        {
+          label: "影片素材方向",
+          before: draftForm.videoRequirement,
+          after: latestAssistantSuggestion.video_requirements.join("\n"),
+        },
+      ].filter((change) => change.before.trim() !== change.after.trim())
+    : [];
   const revisionHistory = editingDraft
     ? drafts
         .filter((draft) => draft.execution_id === editingDraft.execution_id)
@@ -2067,11 +2244,108 @@ export default function Dashboard() {
                 與 Agent 編修貼文
               </h3>
               <p className="mb-0 mt-2 text-sm leading-6 text-maker-muted">
-                選擇內容提案後，可在這裡與 Agent 討論文案、CTA、hashtags 與素材方向，並預覽修改後的貼文。
+                選擇內容提案後，可在這裡與 Agent 討論文案、CTA、hashtags 與素材方向。建議套用後會先回到上方表單與預覽，確認後再建立新版本。
               </p>
-              <div className="mt-4 grid min-h-56 place-items-center rounded-lg border border-dashed border-maker-line bg-stone-50 p-4 text-center text-sm text-maker-muted">
-                貼文對話編輯與預覽功能將於此處提供。
-              </div>
+              {editingDraft ? (
+                <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,.72fr)]">
+                  <div className="rounded-lg border border-maker-line bg-stone-50">
+                    <div className="flex items-center justify-between gap-3 border-b border-maker-line px-4 py-3">
+                      <span className="text-sm font-semibold">{proposalVersion(editingDraft)}：{draftForm.title || "未命名提案"}</span>
+                      <Pill status={editingDraft.status} />
+                    </div>
+                    <div ref={assistantConversationRef} className="max-h-72 space-y-3 overflow-y-auto p-4" aria-live="polite">
+                      {assistantMessages.length ? assistantMessages.map((message) => (
+                        <div key={message.id} className={message.role === "user" ? "ml-8 rounded-xl bg-maker-blue px-4 py-3 text-sm leading-6 text-white" : "mr-8 rounded-xl border border-maker-line bg-white px-4 py-3 text-sm leading-6 text-maker-ink"}>
+                          <p className="m-0 whitespace-pre-wrap">{message.text}</p>
+                        </div>
+                      )) : (
+                        <p className="m-0 py-8 text-center text-sm text-maker-muted">
+                          例如：「把開頭改得更吸引零基礎同學，保留原本 CTA。」
+                        </p>
+                      )}
+                    </div>
+                    <div className="border-t border-maker-line p-3">
+                      <label className="sr-only" htmlFor="draft-assistant-input">請 Agent 修改貼文</label>
+                      <textarea
+                        id="draft-assistant-input"
+                        value={assistantInput}
+                        onChange={(event) => setAssistantInput(event.target.value)}
+                        disabled={assistantSending || isViewingPublishedDraft || editingDraft.status === "EXECUTING"}
+                        rows={3}
+                        placeholder="告訴 Agent 想怎麼改，例如：語氣更活潑，但不要新增沒有提供的活動資訊。"
+                        className="w-full resize-y rounded-lg border border-maker-line bg-white px-3 py-2 text-sm outline-none transition focus:border-maker-blue focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-stone-100"
+                      />
+                      {assistantError && <p className="mb-0 mt-2 text-sm text-red-700">{assistantError}</p>}
+                      <div className="mt-3 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={askDraftAssistant}
+                          disabled={assistantSending || isViewingPublishedDraft || editingDraft.status === "EXECUTING"}
+                          className="rounded-lg bg-maker-blue px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {assistantSending ? "Agent 編修中…" : "請 Agent 提出修改"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-maker-line bg-[#edf3f8] p-4">
+                    <p className="m-0 font-mono text-xs font-semibold tracking-[.12em] text-maker-blue">SUGGESTED CHANGES</p>
+                    <h4 className="mt-2 text-base">本次建議會怎麼改</h4>
+                    {latestAssistantSuggestion ? (
+                      suggestionChanges.length ? (
+                        <>
+                          <p className="mb-0 mt-2 text-sm leading-6 text-maker-muted">
+                            以下是尚未套用的差異。素材網址、發布時間與報名連結不會被 Agent 修改。
+                          </p>
+                          <p className="mb-0 mt-2 text-xs text-maker-muted">
+                            <del className="bg-red-100 text-red-800 decoration-red-600">刪除文字</del>
+                            <span className="mx-2">／</span>
+                            <ins className="bg-emerald-100 text-emerald-800 no-underline">新增文字</ins>
+                          </p>
+                          <div ref={suggestionChangesRef} className="mt-3 max-h-64 space-y-3 overflow-y-auto pr-1">
+                            {suggestionChanges.map((change) => (
+                              <div key={change.label} className="rounded-lg border border-maker-line bg-white p-3 text-sm">
+                                <p className="m-0 font-semibold text-maker-ink">{change.label}</p>
+                                <InlineTextDiff before={change.before} after={change.after} />
+                              </div>
+                            ))}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => applyAssistantSuggestion(latestAssistantSuggestion)}
+                            className="mt-4 w-full rounded-lg bg-maker-blue px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#244e83]"
+                          >
+                            套用建議，繼續修改
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <p className="mb-0 mt-3 rounded-lg bg-white p-3 text-sm leading-6 text-maker-muted">
+                            這份建議已套用，或 Agent 判斷不需要更動內容。你仍可繼續對話提出新的修改方向。
+                          </p>
+                          {assistantUndoForms.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={undoLastAssistantSuggestion}
+                              className="mt-3 w-full rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-50"
+                            >
+                              不要這次修改，還原內容提案
+                            </button>
+                          )}
+                        </>
+                      )
+                    ) : (
+                      <p className="mb-0 mt-3 rounded-lg bg-white p-3 text-sm leading-6 text-maker-muted">
+                        Agent 回覆後，這裡會顯示目前內容與建議版本的差異，供你決定是否接受。
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-4 grid min-h-40 place-items-center rounded-lg border border-dashed border-maker-line bg-stone-50 p-4 text-center text-sm text-maker-muted">
+                  請先在上方「此 Strategy 的內容提案」選擇一則貼文，或先建立一則內容提案。
+                </div>
+              )}
             </section>
           </>
         ) : (

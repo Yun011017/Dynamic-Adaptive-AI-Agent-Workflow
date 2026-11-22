@@ -278,6 +278,51 @@ class ContentDraftGenerateRequest(BaseModel):
         return self
 
 
+class ContentDraftAssistantSuggestion(BaseModel):
+    """Only the editable copy and production-direction fields may be suggested."""
+
+    title: str = Field(min_length=1, max_length=160)
+    caption: str = Field(min_length=1, max_length=2_200)
+    hashtags: list[str] = Field(default_factory=list, max_length=30)
+    image_requirements: list[str] = Field(default_factory=list, max_length=12)
+    video_requirements: list[str] = Field(default_factory=list, max_length=12)
+
+    @field_validator("hashtags")
+    @classmethod
+    def normalize_hashtags(cls, values: list[str]) -> list[str]:
+        return ContentDraftCreate.normalize_hashtags(values)
+
+    @field_validator("image_requirements")
+    @classmethod
+    def clean_image_requirements(cls, values: list[str]) -> list[str]:
+        return ContentDraftCreate.clean_image_requirements(values)
+
+    @field_validator("video_requirements")
+    @classmethod
+    def clean_video_requirements(cls, values: list[str]) -> list[str]:
+        return ContentDraftCreate.clean_video_requirements(values)
+
+
+class ContentDraftAssistantRequest(BaseModel):
+    """A focused instruction plus the user's latest, not-yet-saved proposal."""
+
+    message: str = Field(min_length=1, max_length=1_000)
+    current_content: ContentDraftAssistantSuggestion | None = None
+
+    @field_validator("message")
+    @classmethod
+    def clean_message(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("請輸入想請 Agent 協助修改的內容")
+        return cleaned
+
+
+class ContentDraftAssistantResponse(BaseModel):
+    reply: str = Field(min_length=1, max_length=2_000)
+    suggestion: ContentDraftAssistantSuggestion
+
+
 class ApprovedScheduleUpdate(BaseModel):
     """Change only the release time of already-approved, unchanged content."""
 

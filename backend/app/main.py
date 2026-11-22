@@ -1,5 +1,6 @@
 import hmac
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Literal
@@ -14,12 +15,13 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .content_draft_jobs import queue_content_draft_run
+from .content_generator import ContentDraftGenerationError, revise_content_draft_with_agent
 from .db import engine, get_db
 from .content_drafts import create_content_draft, create_content_draft_version
 from .evaluation import METRICS, build_evaluation_graph
 from .models import AgentRun, AgentRunCheckpoint, Execution, ExecutionAction, Goal, Observation, Strategy, Workspace
 from .retry import read_with_retry
-from .schemas import AgentRunCreate, AgentRunRead, ApprovedScheduleUpdate, ContentDraftCreate, ContentDraftGenerateRequest, ContentDraftRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead, MediaUploadPresignRequest, MediaUploadPresignRead, UploadedMediaRead
+from .schemas import AgentRunCreate, AgentRunRead, ApprovedScheduleUpdate, ContentDraftAssistantRequest, ContentDraftAssistantResponse, ContentDraftCreate, ContentDraftGenerateRequest, ContentDraftRead, ExecutionRead, GoalCreate, GoalRead, StrategyCreate, StrategyRead, MediaUploadPresignRequest, MediaUploadPresignRead, UploadedMediaRead
 from .services.media_storage import cleanup_expired_media_assets, complete_direct_upload, create_direct_upload, upload_media_via_proxy
 from .form_bindings import bind_form_source, list_form_sources
 from .schemas import FormBindingCreate
@@ -29,6 +31,7 @@ from .models import FormSource
 from .form_sync import FormSyncError
 
 app = FastAPI(title="Dynamic Adaptive AI Agent Workflow", version="0.2.0")
+logger = logging.getLogger(__name__)
 evaluation_graph = build_evaluation_graph()
 app.add_middleware(
     CORSMiddleware,
@@ -488,6 +491,44 @@ def revise_draft(action_id: int, data: ContentDraftCreate, db: DB, tenant: Tenan
     db.commit()
     db.refresh(row)
     return row
+
+
+@app.post("/content-drafts/{action_id}/assistant", response_model=ContentDraftAssistantResponse)
+def revise_draft_with_agent(action_id: int, data: ContentDraftAssistantRequest, db: DB, tenant: Tenant):
+    """Create an in-memory revision suggestion; applying it remains a user action."""
+    action = scoped(db, ExecutionAction, action_id, tenant)
+    if action.tool != "meta_api" or action.operation != "instagram_publish":
+        raise HTTPException(404, "找不到內容提案")
+    if action.status in {"EXECUTING", "SUCCEEDED"}:
+        raise HTTPException(409, "已發布或發布中的提案僅供查看，不能再請 Agent 修改")
+    execution = scoped(db, Execution, action.execution_id, tenant)
+    strategy = scoped(db, Strategy, execution.strategy_id, tenant)
+    goal = scoped(db, Goal, strategy.goal_id, tenant)
+    try:
+        current_draft = ContentDraftCreate.model_validate({
+            **action.payload,
+            **(data.current_content.model_dump() if data.current_content else {}),
+            "channel": "instagram",
+            "scheduled_at": None,
+            "schedule_requested": False,
+        })
+    except Exception as exc:
+        raise HTTPException(422, "這則提案資料無法用於 Agent 編修") from exc
+    try:
+        return revise_content_draft_with_agent(
+            goal=goal,
+            strategy=strategy,
+            current_draft=current_draft,
+            message=data.message,
+            provider=settings.agent_provider,
+            model_name=settings.agent_model,
+        )
+    except ContentDraftGenerationError as exc:
+        logger.exception("Content-draft assistant returned an invalid suggestion for action %s", action_id)
+        raise HTTPException(502, "Agent 暫時無法完成貼文編修，請稍後再試") from exc
+    except Exception as exc:
+        logger.exception("Content-draft assistant could not reach the model for action %s", action_id)
+        raise HTTPException(503, "Agent 無法連線至模型服務，請確認網路與 Google API 設定後再試") from exc
 
 
 @app.patch("/content-drafts/{action_id}/schedule", response_model=ContentDraftRead)

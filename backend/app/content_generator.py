@@ -7,7 +7,7 @@ from datetime import datetime
 
 from .agent_runner import _model_for
 from .models import Goal, Strategy
-from .schemas import ContentDraftCreate
+from .schemas import ContentDraftAssistantResponse, ContentDraftAssistantSuggestion, ContentDraftCreate
 
 
 CONTENT_SYSTEM_PROMPT = """你是 NTUMaker（臺大自造者社）的資深社群行銷幹部兼首席文案。
@@ -163,3 +163,61 @@ def generate_content_draft(
         return ContentDraftCreate.model_validate(generated)
     except Exception as exc:
         raise ContentDraftGenerationError("Content model output did not match the draft contract") from exc
+
+
+def revise_content_draft_with_agent(
+    *,
+    goal: Goal,
+    strategy: Strategy,
+    current_draft: ContentDraftCreate,
+    message: str,
+    provider: str,
+    model_name: str,
+) -> ContentDraftAssistantResponse:
+    """Return a suggested revision without changing the persisted proposal."""
+    current = ContentDraftAssistantSuggestion(
+        title=current_draft.title,
+        caption=current_draft.caption,
+        hashtags=current_draft.hashtags,
+        image_requirements=current_draft.image_requirements,
+        video_requirements=current_draft.video_requirements,
+    )
+    if provider == "local":
+        return ContentDraftAssistantResponse(
+            reply="目前使用本機模式，因此先保留原提案。連上 Gemini、OpenAI 或 Anthropic 後，Agent 就能依你的指示產生改寫建議。",
+            suggestion=current,
+        )
+
+    prompt = {
+        "goal": {"title": goal.title, "description": goal.description, "constraints": goal.constraints},
+        "strategy": {"id": strategy.id, "version": strategy.version, "content": strategy.content, "rationale": strategy.rationale},
+        "current_draft": current.model_dump(),
+        "user_request": message,
+        "task": "依使用者要求修訂 Instagram 內容提案，但不要直接發布或儲存。",
+        "rules": [
+            "以繁體中文回覆，只輸出 JSON object，欄位必須是 reply 與 suggestion。",
+            "reply 為 1 至 3 句，清楚說明這次調整；suggestion 必須包含完整的 title、caption、hashtags、image_requirements、video_requirements。",
+            "只能使用提供的 Goal、Strategy 與現有草稿；不得編造日期、地點、價格、活動成果、帳號或網址。",
+            "不可新增、刪除、改寫或重複補回報名連結；如現有 caption 有網址，必須原樣保留。",
+            "不要輸出素材網址、發布指令、token 或帳號資訊。貼文格式、排程與現有上傳素材由使用者在表單另外管理。",
+            "hashtags 不含 #；若使用者的要求與既有事實衝突，保留事實並在 reply 簡短說明。",
+        ],
+    }
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    model = _model_for(provider, model_name)
+    response = model.invoke([
+        SystemMessage(content=CONTENT_SYSTEM_PROMPT),
+        HumanMessage(content=json.dumps(prompt, ensure_ascii=False)),
+    ])
+    generated = _json_object(_text_content(response.content))
+    raw_suggestion = generated.get("suggestion")
+    if not isinstance(raw_suggestion, dict):
+        raise ContentDraftGenerationError("Content model did not return a revision suggestion")
+    merged = {**current.model_dump(), **raw_suggestion}
+    try:
+        suggestion = ContentDraftAssistantSuggestion.model_validate(merged)
+        reply = str(generated.get("reply") or "已依你的需求整理一份可套用的修改建議。").strip()
+        return ContentDraftAssistantResponse(reply=reply, suggestion=suggestion)
+    except Exception as exc:
+        raise ContentDraftGenerationError("Content model revision did not match the draft contract") from exc
