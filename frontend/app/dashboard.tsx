@@ -1614,6 +1614,105 @@ export default function Dashboard() {
         </div>
         {selectedStrategy ? (
           <>
+            <section
+              aria-labelledby="strategy-drafts-heading"
+              className="mt-6 rounded-xl border border-maker-line p-5"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <h3 id="strategy-drafts-heading" className="m-0 text-lg">
+                  此 Strategy 的內容提案
+                </h3>
+                <button
+                  type="button"
+                  disabled={draftRefreshing}
+                  onClick={() => refreshDrafts(true)}
+                  className="rounded-lg bg-stone-100 px-3 py-2 text-sm font-semibold text-maker-blue transition hover:bg-stone-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {draftRefreshing ? "更新中…" : "重新整理"}
+                </button>
+              </div>
+              {activeDrafts.length ? (
+                <ol className="mt-4 grid max-h-[34rem] list-none gap-3 overflow-y-auto p-0 pr-2">
+                  {activeDrafts.map((draft) => (
+                    <li
+                      key={draft.id}
+                      className="rounded-xl border border-maker-line p-4"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => beginRevision(draft)}
+                        className="w-full text-left"
+                      >
+                        <span className="flex flex-wrap items-center justify-between gap-2">
+                          <strong>提案 {proposalVersion(draft)}</strong>
+                          <Pill status={draft.status} />
+                        </span>
+                        <span className="mt-2 block truncate text-sm text-maker-muted">
+                          {draft.payload.title ||
+                            draft.payload.caption ||
+                            "尚無提案內容"}
+                        </span>
+                        <span className="mt-2 block text-sm font-semibold text-maker-blue">
+                          點擊查看與修改 →
+                        </span>
+                      </button>
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        {draft.status === "DRAFT" &&
+                          (() => {
+                            const missing = reviewRequirements(draft);
+                            return (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={
+                                    missing.length > 0 ||
+                                    reviewSubmittingId === draft.id
+                                  }
+                                  onClick={() => submitForReview(draft.id)}
+                                  className="rounded-lg bg-maker-blue px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  {reviewSubmittingId === draft.id
+                                    ? "送審中…"
+                                    : "送交人工審核"}
+                                </button>
+                                {missing.length > 0 && (
+                                  <span className="text-xs text-maker-muted">
+                                    送交人工審核前需要完成：
+                                    {missing.join("、")}
+                                  </span>
+                                )}
+                              </>
+                            );
+                          })()}
+                        {draft.status === "SUCCEEDED" && (
+                          <span className="font-mono text-xs font-semibold text-emerald-700">
+                            ✓ 已成功發布 (ID: {draft.external_id})
+                          </span>
+                        )}
+                        {draft.status === "FAILED" && (
+                          <>
+                            <span className="text-xs font-semibold text-red-700">
+                              原因：{draft.payload.publish_result?.message || "此舊紀錄尚未保存失敗原因。"}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => beginRevision(draft)}
+                              className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50"
+                            >
+                              以此失敗版本建立新版本
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="py-12 text-center text-maker-muted">
+                  尚未建立內容提案。
+                </p>
+              )}
+            </section>
             <FormBindingPanel key={selectedStrategy} strategyId={selectedStrategy} goalId={selectedStrategyRecord?.goal_id || 0} apiBase={normal()} apiKey={key}
               executionLabels={Object.fromEntries(drafts.map((draft) => [draft.execution_id, draft.payload.title || `內容提案 #${draft.id}`]))} />
             <div className="mt-6 grid gap-6 lg:grid-cols-[1.05fr_.95fr]">
@@ -1935,101 +2034,45 @@ export default function Dashboard() {
                   postFormat={draftForm.postFormat}
                 />
               </form>
-              <div className="rounded-xl border border-maker-line p-5">
-                <div className="flex items-center justify-between gap-3">
-                  <h3 className="m-0 text-lg">此 Strategy 的內容提案</h3>
-                  <button
-                    type="button"
-                    disabled={draftRefreshing}
-                    onClick={() => refreshDrafts(true)}
-                    className="rounded-lg bg-stone-100 px-3 py-2 text-sm font-semibold text-maker-blue transition hover:bg-stone-200 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {draftRefreshing ? "更新中…" : "重新整理"}
-                  </button>
-                </div>
-                {activeDrafts.length ? (
-                  <ol className="mt-4 grid max-h-[34rem] list-none gap-3 overflow-y-auto pr-2 p-0">
-                    {activeDrafts.map((draft) => (
-                      <li
-                        key={draft.id}
-                        className="rounded-xl border border-maker-line p-4"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => beginRevision(draft)}
-                          className="w-full text-left"
-                        >
-                          <span className="flex flex-wrap items-center justify-between gap-2">
-                            <strong>提案 {proposalVersion(draft)}</strong>
-                            <Pill status={draft.status} />
-                          </span>
-                          <span className="mt-2 block truncate text-sm text-maker-muted">
-                            {draft.payload.title ||
-                              draft.payload.caption ||
-                              "尚無提案內容"}
-                          </span>
-                          <span className="mt-2 block text-sm font-semibold text-maker-blue">
-                            點擊查看與修改 →
-                          </span>
-                        </button>
-                        <div className="mt-3 flex flex-wrap items-center gap-2">
-                          {draft.status === "DRAFT" &&
-                            (() => {
-                              const missing = reviewRequirements(draft);
-                              return (
-                                <>
-                                  <button
-                                    type="button"
-                                    disabled={
-                                      missing.length > 0 ||
-                                      reviewSubmittingId === draft.id
-                                    }
-                                    onClick={() => submitForReview(draft.id)}
-                                    className="rounded-lg bg-maker-blue px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#244e83] disabled:cursor-not-allowed disabled:opacity-50"
-                                  >
-                                    {reviewSubmittingId === draft.id
-                                      ? "送審中…"
-                                      : "送交人工審核"}
-                                  </button>
-                                  {missing.length > 0 && (
-                                    <span className="text-xs text-maker-muted">
-                                      送交人工審核前需要完成：
-                                      {missing.join("、")}
-                                    </span>
-                                  )}
-                                </>
-                              );
-                            })()}
-                          {draft.status === "SUCCEEDED" && (
-                            <span className="font-mono text-xs font-semibold text-emerald-700">
-                              ✓ 已成功發布 (ID: {draft.external_id})
-                            </span>
-                          )}
-                          {draft.status === "FAILED" && (
-                            <>
-                              <span className="text-xs font-semibold text-red-700">
-                                原因：{draft.payload.publish_result?.message || "此舊紀錄尚未保存失敗原因。"}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => beginRevision(draft)}
-                                className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50"
-                              >
-                                以此失敗版本建立新版本
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                ) : (
-                  <p className="py-12 text-center text-maker-muted">
-                    尚未建立內容提案。
+              <aside aria-label="活動表單草稿工作區">
+                <section
+                  aria-labelledby="form-draft-heading"
+                  className="rounded-xl border border-maker-line bg-[#edf3f8] p-5"
+                >
+                  <p className="m-0 font-mono text-xs font-semibold tracking-[.12em] text-maker-blue">
+                    FORM DRAFT
                   </p>
-                )}
-              </div>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+                    <h3 id="form-draft-heading" className="m-0 text-lg">
+                      活動報名表草稿
+                    </h3>
+                    <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-maker-muted">
+                      即將提供
+                    </span>
+                  </div>
+                  <p className="mb-0 mt-2 text-sm leading-6 text-maker-muted">
+                    此區將由 Agent 依 Strategy 建議報名表欄位與問題草稿，供確認後建立活動表單。
+                  </p>
+                </section>
+              </aside>
             </div>
+            <section
+              aria-labelledby="content-copilot-heading"
+              className="mt-6 rounded-xl border border-maker-line p-5"
+            >
+              <p className="m-0 font-mono text-xs font-semibold tracking-[.12em] text-maker-blue">
+                CONTENT COPILOT
+              </p>
+              <h3 id="content-copilot-heading" className="mt-2 text-lg">
+                與 Agent 編修貼文
+              </h3>
+              <p className="mb-0 mt-2 text-sm leading-6 text-maker-muted">
+                選擇內容提案後，可在這裡與 Agent 討論文案、CTA、hashtags 與素材方向，並預覽修改後的貼文。
+              </p>
+              <div className="mt-4 grid min-h-56 place-items-center rounded-lg border border-dashed border-maker-line bg-stone-50 p-4 text-center text-sm text-maker-muted">
+                貼文對話編輯與預覽功能將於此處提供。
+              </div>
+            </section>
           </>
         ) : (
           <p className="mt-8 rounded-xl bg-stone-50 p-6 text-center text-maker-muted">
