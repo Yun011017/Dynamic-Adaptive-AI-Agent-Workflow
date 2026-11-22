@@ -1443,7 +1443,10 @@ export default function Dashboard() {
         <section className="rounded-2xl border border-maker-line bg-maker-paper p-6 shadow-panel">
           {showForm ? (
             <>
-              <h2 className="mt-0 pb-4 text-xl">新增工作</h2>
+              <p className="m-0 font-mono text-xs font-semibold tracking-[.12em] text-maker-blue">
+                NEW WORK
+              </p>
+              <h2 className="mt-1 pb-4 text-xl">新增工作</h2>
               <form onSubmit={submit} className="space-y-5">
                 <Field label="活動目標 *">
                   <input
@@ -1902,13 +1905,18 @@ export default function Dashboard() {
                 className="space-y-4 rounded-xl border border-maker-line p-5"
               >
                 <div className="flex items-center justify-between gap-3">
-                  <h3 className="m-0 text-lg">
-                    {isViewingPublishedDraft
-                      ? `查看已發布提案 ${proposalVersion(editingDraft!)}`
-                      : editingDraft
-                      ? `修改內容提案 ${proposalVersion(editingDraft)}`
-                      : "新增內容提案"}
-                  </h3>
+                  <div>
+                    <p className="m-0 font-mono text-xs font-semibold tracking-[.12em] text-maker-blue">
+                      CONTENT EDITOR
+                    </p>
+                    <h3 className="mb-0 mt-1 text-lg">
+                      {isViewingPublishedDraft
+                        ? `查看已發布提案 ${proposalVersion(editingDraft!)}`
+                        : editingDraft
+                        ? `修改內容提案 ${proposalVersion(editingDraft)}`
+                        : "新增內容提案"}
+                    </h3>
+                  </div>
                   {editingDraft && (
                     <button
                       type="button"
@@ -2562,7 +2570,10 @@ export default function Dashboard() {
             onSubmit={save}
             className="w-full max-w-lg rounded-2xl bg-maker-paper p-6 shadow-2xl"
           >
-            <h2 className="mt-0 text-2xl pb-4">後端連線設定</h2>
+            <p className="m-0 font-mono text-xs font-semibold tracking-[.12em] text-maker-blue">
+              CONNECTION SETTINGS
+            </p>
+            <h2 className="mt-1 text-2xl pb-4">後端連線設定</h2>
             <div className="space-y-4">
               <Field label="FastAPI URL">
                 <input
